@@ -34,6 +34,8 @@ Then on your mac again:
 That will open an https-served page (see [public/index.html](public/index.html)), you can open it on your iPhone
 or continue on mac.
 
+### Yubikey
+
 You'll need Yubikey 5C NFC with fw 5.7+, which support largeBlobs.
 
 You can check for support with something like this:
@@ -49,3 +51,9 @@ options: ... largeBlobs ...
 ```
 
 Then Yubikey supports FIDO2 CTAP 2.1 features (✅ firmware ≥ 5.7).
+
+### Passkey
+
+If you don't have a Yubikey that supports largeBlobs, you can use platform's passkey.
+
+**NOTE that iOS will share passkey to your devices via iCloud.**
