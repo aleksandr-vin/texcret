@@ -1,5 +1,13 @@
 # Texcret — from Tex(t Se)cret
 
+PoC for the encryption/decryption happenning on web page. No server communication, no OS communication.
+
+Page loads from server with encrypted payload. Then device can go offline.
+User authenticates **ON THE PAGE** with Yubikey: no remote calls to servers are made.
+Page reads a secret key from the Yubikey credentials (securely stored on Yubikey per registered credential:
+User x Relying Party x Page Origin) and decrypts the payload on the page.
+When user wants to hide page payload again, they refresh or close the page.
+
 ## Running locally
 
 Create local cert:
