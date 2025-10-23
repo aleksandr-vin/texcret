@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8" />
+<title>YubiKey NFC + largeBlob demo</title>
+<style>
+  body {
+    font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+    max-width: 700px;
+    margin: 3rem auto;
+  }
+
+  button {
+    padding: .6rem 1rem;
+    margin-right: .5rem;
+  }
+
+  #log {
+    white-space: pre-wrap;
+    background: #f6f6f8;
+    padding: 1rem;
+    border-radius: 8px;
+  }
+</style>
+<h2>YubiKey NFC largeBlob demo</h2>
+<p>Register writes a secret into the key’s largeBlob; Authenticate reads it and decrypts.</p>
+
+<p><button id="register">Register key + store secret</button></p>
+<p><button id="authenticate">Authenticate + read secret</button></p>
+<p><button id="encrypt">Encrypt sample text (with stored secret)</button></p>
+<p><button id="decrypt">Decrypt sample text</button></p>
+
+<div class="inputs">
+  <p>
+    <label for="pt">Plaintext:</label>
+  </p>
+  <p>
+    <input name="pt" id="pt" value="hello from the sea 🐬" />
+  </p>
+  <p>
+    <label for="ct">Ciphertext (base64):</label>
+  </p>
+  <p>
+    <input name="ct" id="ct" size="60" />
+  </p>
+</div>
+
+<div id="log"></div>
+
+<script>
+  const log = (...a) => { document.querySelector('#log').textContent += a.join(' ') + "\n"; };
+  const b64 = ab => btoa(String.fromCharCode(...new Uint8Array(ab)));
+  const ubuf = b64s => Uint8Array.from(atob(b64s), c => c.charCodeAt(0)).buffer;
+
+  let credentialIdB64 = localStorage.getItem('credIdB64') || null;
+  let ivB64 = localStorage.getItem('ivB64') || null;         // for AES-GCM example
+  let secretB64 = null; // loaded from largeBlob on authenticate
+
+  // ---- WebAuthn helpers
+  const rp = { id: location.hostname, name: "Demo RP" };
+  const user = { id: crypto.getRandomValues(new Uint8Array(16)), name: "demo@example.com", displayName: "Demo User" };
+
+  function randomBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a.buffer; }
+
+  // ---- Registration: create credential AND write largeBlob (32-byte secret)
+  async function doRegister() {
+    // see https://github.com/w3c/webauthn/wiki/Explainer:-WebAuthn-Large-Blob-Extension
+
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp,
+        user,
+        pubKeyCredParams: [{ type: "public-key", alg: -7 }], // ES256
+        authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+        timeout: 60000,
+        attestation: "none",
+        extensions: {
+          largeBlob: { support: "required" }
+        }
+      }
+    });
+
+    credentialIdB64 = b64(cred.rawId);
+    localStorage.setItem('credIdB64', credentialIdB64);
+    log("✅ Registered credential. ID:", credentialIdB64);
+
+    if (!cred.getClientExtensionResults().largeBlob) {
+      log("❌ Large blob not supported by the user agent.");
+      return;
+    } else {
+      log("✅  Large blob is supported by the user agent.");
+    }
+
+    try {
+      const secret = randomBytes(32); // store this in largeBlob
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          allowCredentials: [{
+            type: "public-key",
+            id: ubuf(credentialIdB64),
+            transports: ["nfc", "usb", "ble"]
+          }],
+          userVerification: "preferred",
+          timeout: 60000,
+          extensions: {
+            largeBlob: { write: new Uint8Array(secret) }
+          }
+        }
+      });
+
+      if (assertion.getClientExtensionResults().largeBlob.written) {
+        // keep a copy of the plaintext secret OUTSIDE only for demo encryption now;
+        // in a real app, you could also encrypt data right after create() and store ciphertext server-side.
+        secretB64 = b64(secret);
+
+        log("🔐 Secret (32B) written to largeBlob.");
+      } else {
+        // The large blob could not be written (e.g. because of a lack of space).
+        // The assertion is still valid.
+        log("❌ The large blob could not be written");
+      }
+    } catch (e) { log("❌ Secret store failed:", e.message); console.error(e); }
+  }
+
+  // ---- Authentication: get assertion AND read largeBlob back
+  async function doAuthenticate() {
+    if (!credentialIdB64) { return log("⚠️ No credential; register first."); }
+
+    const publicKey = {
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      allowCredentials: [{
+        id: ubuf(credentialIdB64), type: "public-key",
+        transports: ["nfc", "usb", "ble"]
+      }],
+      userVerification: "preferred",
+      timeout: 60000,
+      // Ask to read the largeBlob
+      extensions: { largeBlob: { read: true } }
+    };
+
+    try {
+      const assertion = await navigator.credentials.get({ publicKey });
+      const clientExt = assertion.getClientExtensionResults();
+      if (clientExt && clientExt.largeBlob && clientExt.largeBlob.blob) {
+        secretB64 = b64(clientExt.largeBlob.blob); // ArrayBuffer -> b64
+        log("✅ Authenticated. Read secret from largeBlob (" + (clientExt.largeBlob.blob.byteLength) + " bytes).");
+      } else {
+        log("⚠️ Auth OK but largeBlob read not returned (not supported or not present).");
+      }
+    } catch (e) { log("❌ Authentication failed:", e.message); console.error(e); }
+  }
+
+  // ---- WebCrypto AES-GCM using the secret as raw key
+  async function importKeyFromSecretB64() {
+    if (!secretB64) throw new Error("No secret loaded. Authenticate first.");
+    const key = await crypto.subtle.importKey(
+      "raw", ubuf(secretB64), { name: "AES-GCM" }, false, ["encrypt", "decrypt"]
+    );
+    return key;
+  }
+
+  document.querySelector('#encrypt').onclick = async () => {
+    try {
+      const key = await importKeyFromSecretB64();
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const pt = new TextEncoder().encode(document.querySelector('#pt').value);
+      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt);
+      const out = b64(new Uint8Array([...iv, ...new Uint8Array(ct)]).buffer);
+      document.querySelector('#ct').value = out;
+      localStorage.setItem('ivB64', b64(iv.buffer));
+      log("🔒 Encrypted with largeBlob secret.");
+    } catch (e) { log("❌ Encrypt error:", e.message); }
+  };
+
+  document.querySelector('#decrypt').onclick = async () => {
+    try {
+      const key = await importKeyFromSecretB64();
+      const combo = new Uint8Array(ubuf(document.querySelector('#ct').value));
+      const iv = combo.slice(0, 12);
+      const ct = combo.slice(12);
+      const ptBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
+      const pt = new TextDecoder().decode(ptBuf);
+      log("🔓 Decrypted plaintext:", pt);
+    } catch (e) { log("❌ Decrypt error:", e.message); }
+  };
+
+  document.querySelector('#register').onclick = doRegister;
+  document.querySelector('#authenticate').onclick = doAuthenticate;
+</script>
+
+</html>
