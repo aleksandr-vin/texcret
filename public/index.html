@@ -57,7 +57,7 @@
 
   // ---- WebAuthn helpers
   const rp = { id: location.hostname, name: "Demo RP" };
-  const user = { id: crypto.getRandomValues(new Uint8Array(16)), name: "demo@example.com", displayName: "Demo User" };
+  const user = { id: crypto.getRandomValues(new Uint8Array(16)), name: "jay@mac.home", displayName: "Jay" };
 
   function randomBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a.buffer; }
 
@@ -71,7 +71,11 @@
         rp,
         user,
         pubKeyCredParams: [{ type: "public-key", alg: -7 }], // ES256
-        authenticatorSelection: { residentKey: "preferred", userVerification: "preferred" },
+        authenticatorSelection: {
+          // authenticatorAttachment: "platform",   // <- Limiting to only passkey on iOS
+          residentKey: "preferred",
+          userVerification: "preferred",
+        },
         timeout: 60000,
         attestation: "none",
         extensions: {
@@ -96,11 +100,13 @@
       const assertion = await navigator.credentials.get({
         publicKey: {
           challenge: crypto.getRandomValues(new Uint8Array(32)),
-          allowCredentials: [{
-            type: "public-key",
-            id: ubuf(credentialIdB64),
-            transports: ["nfc", "usb", "ble"]
-          }],
+          rp,
+          user,
+          // allowCredentials: [{
+          //   type: "public-key",
+          //   id: ubuf(credentialIdB64),
+          //   //transports: ["nfc", "usb", "ble"] // <-- Limiting to Yubikey only
+          // }],
           userVerification: "preferred",
           timeout: 60000,
           extensions: {
@@ -129,10 +135,13 @@
 
     const publicKey = {
       challenge: crypto.getRandomValues(new Uint8Array(32)),
-      allowCredentials: [{
-        id: ubuf(credentialIdB64), type: "public-key",
-        transports: ["nfc", "usb", "ble"]
-      }],
+      rp,
+      user,
+      // allowCredentials: [{
+      //   type: "public-key",
+      //   id: ubuf(credentialIdB64),
+      //   // transports: ["nfc", "usb", "ble"] // <-- Limiting to Yubikey only
+      // }],
       userVerification: "preferred",
       timeout: 60000,
       // Ask to read the largeBlob
