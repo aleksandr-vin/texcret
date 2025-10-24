@@ -29,6 +29,8 @@
 <p><button id="encrypt">Encrypt sample text (with stored secret)</button></p>
 <p><button id="decrypt">Decrypt sample text</button></p>
 
+<p><span id="authState" class="muted">(secret: not loaded)</span></p>
+
 <div class="inputs">
   <p>
     <label for="pt">Plaintext:</label>
@@ -47,19 +49,21 @@
 <div id="log"></div>
 
 <script>
-  const log = (...a) => { document.querySelector('#log').textContent += a.join(' ') + "\n"; };
+  const $ = sel => document.querySelector(sel);
+  const log = (...a) => { $('#log').textContent += a.join(' ') + "\n"; };
+  const enc = new TextEncoder(), dec = new TextDecoder();
   const b64 = ab => btoa(String.fromCharCode(...new Uint8Array(ab)));
   const ubuf = b64s => Uint8Array.from(atob(b64s), c => c.charCodeAt(0)).buffer;
+  function be16(n) { return new Uint8Array([(n >>> 8) & 0xff, n & 0xff]); }
+  function readBE16(u8, off) { return (u8[off] << 8) | u8[off + 1]; }
+  function randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
 
   let credentialIdB64 = localStorage.getItem('credIdB64') || null;
-  let ivB64 = localStorage.getItem('ivB64') || null;         // for AES-GCM example
   let secretB64 = null; // loaded from largeBlob on authenticate
 
   // ---- WebAuthn helpers
   const rp = { id: location.hostname, name: "Demo RP" };
-  const user = { id: crypto.getRandomValues(new Uint8Array(16)), name: "jay@mac.home", displayName: "Jay" };
-
-  function randomBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a.buffer; }
+  const user = { id: randBytes(16), name: "jay@mac.home", displayName: "Jay" };
 
   // ---- Registration: create credential AND write largeBlob (32-byte secret)
   async function doRegister() {
@@ -67,7 +71,7 @@
 
     const cred = await navigator.credentials.create({
       publicKey: {
-        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        challenge: randBytes(32),
         rp,
         user,
         pubKeyCredParams: [{ type: "public-key", alg: -7 }], // ES256
@@ -96,10 +100,10 @@
     }
 
     try {
-      const secret = randomBytes(32); // store this in largeBlob
+      const secret = randBytes(32); // store this in largeBlob
       const assertion = await navigator.credentials.get({
         publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          challenge: randBytes(32),
           rp,
           user,
           // allowCredentials: [{
@@ -119,7 +123,8 @@
         // keep a copy of the plaintext secret OUTSIDE only for demo encryption now;
         // in a real app, you could also encrypt data right after create() and store ciphertext server-side.
         secretB64 = b64(secret);
-
+        $("#authState").textContent = "secret: loaded (from registration)";
+        $("#authState").className = "ok";
         log("🔐 Secret (32B) written to largeBlob.");
       } else {
         // The large blob could not be written (e.g. because of a lack of space).
@@ -131,10 +136,10 @@
 
   // ---- Authentication: get assertion AND read largeBlob back
   async function doAuthenticate() {
-    if (!credentialIdB64) { return log("⚠️ No credential; register first."); }
+    // if (!credentialIdB64) { return log("⚠️ No credential; register first."); }
 
     const publicKey = {
-      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      challenge: randBytes(32),
       rp,
       user,
       // allowCredentials: [{
@@ -153,11 +158,59 @@
       const clientExt = assertion.getClientExtensionResults();
       if (clientExt && clientExt.largeBlob && clientExt.largeBlob.blob) {
         secretB64 = b64(clientExt.largeBlob.blob); // ArrayBuffer -> b64
+        $("#authState").textContent = "secret: loaded (from authentication)";
+        $("#authState").className = "ok";
         log("✅ Authenticated. Read secret from largeBlob (" + (clientExt.largeBlob.blob.byteLength) + " bytes).");
       } else {
         log("⚠️ Auth OK but largeBlob read not returned (not supported or not present).");
       }
     } catch (e) { log("❌ Authentication failed:", e.message); console.error(e); }
+  }
+
+  /* ===== Key derivation (HKDF-SHA256) from largeBlob secret ===== */
+  async function deriveAesKey(secretRaw, salt) {
+    const ikm = await crypto.subtle.importKey("raw", secretRaw, "HKDF", false, ["deriveKey"]);
+    return crypto.subtle.deriveKey(
+      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("YK-largeBlob-text") },
+      ikm,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  }
+
+  /* ===== File format =====
+  * Header:
+  *   0..5    : ASCII "YKLB1\0" (6 bytes, NUL terminator)
+  *   6..21   : salt (16 bytes)
+  *   22..33  : iv (12 bytes)
+  *   34..35  : nameLen (uint16 BE)
+  *   36..(36+nameLen-1): filename UTF-8
+  *   ...     : ciphertext (AES-GCM)
+  */
+  const MAGIC = new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x31, 0x00]); // "YKLB1\0"
+
+  function makeHeader(salt, iv, name) {
+    const nameUtf8 = enc.encode(name);
+    const nameLen = nameUtf8.length;
+    const head = new Uint8Array(36 + nameLen);
+    head.set(MAGIC, 0);
+    head.set(salt, 6);
+    head.set(iv, 22);
+    head.set(be16(nameLen), 34);
+    head.set(nameUtf8, 36);
+    return head;
+  }
+
+  function parseHeader(u8) {
+    for (let i = 0; i < 6; i++) { if (u8[i] !== MAGIC[i]) throw new Error("Bad magic / not a YKLB1 file"); }
+    const salt = u8.slice(6, 22);
+    const iv = u8.slice(22, 34);
+    const nameLen = readBE16(u8, 34);
+    const nameBytes = u8.slice(36, 36 + nameLen);
+    const name = dec.decode(nameBytes);
+    const bodyOffset = 36 + nameLen;
+    return { salt, iv, name, bodyOffset };
   }
 
   // ---- WebCrypto AES-GCM using the secret as raw key
@@ -169,33 +222,49 @@
     return key;
   }
 
-  document.querySelector('#encrypt').onclick = async () => {
+  $('#encrypt').onclick = async () => {
     try {
-      const key = await importKeyFromSecretB64();
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const pt = new TextEncoder().encode(document.querySelector('#pt').value);
-      const ct = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt);
-      const out = b64(new Uint8Array([...iv, ...new Uint8Array(ct)]).buffer);
-      document.querySelector('#ct').value = out;
-      localStorage.setItem('ivB64', b64(iv.buffer));
+      const name = "some file name";
+      const secretRaw = ubuf(secretB64);
+      const salt = randBytes(16);
+      const iv = randBytes(12);
+      log("salt: ", b64(salt.buffer));
+      log("iv: ", b64(iv.buffer));
+      log("name: ", name);
+      const key = await deriveAesKey(secretRaw, salt);
+      const pt = enc.encode($('#pt').value);
+      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt));
+      const header = makeHeader(salt, iv, name);
+
+      const out = new Uint8Array(header.length + ct.length);
+      out.set(header, 0);
+      out.set(ct, header.length);
+
+      $('#ct').value = b64(out.buffer);
       log("🔒 Encrypted with largeBlob secret.");
     } catch (e) { log("❌ Encrypt error:", e.message); }
   };
 
-  document.querySelector('#decrypt').onclick = async () => {
+  $('#decrypt').onclick = async () => {
     try {
-      const key = await importKeyFromSecretB64();
-      const combo = new Uint8Array(ubuf(document.querySelector('#ct').value));
-      const iv = combo.slice(0, 12);
-      const ct = combo.slice(12);
-      const ptBuf = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct);
-      const pt = new TextDecoder().decode(ptBuf);
+      const secretRaw = ubuf(secretB64);
+      const data = new Uint8Array(ubuf($('#ct').value));
+      const { salt, iv, name, bodyOffset } = parseHeader(data);
+      log("salt: ", b64(salt));
+      log("iv: ", b64(iv));
+      log("name: ", name);
+      const key = await deriveAesKey(secretRaw, salt);
+      const ct = data.slice(bodyOffset);
+      const ptBuf = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+      const pt = dec.decode(ptBuf);
+      log("🔓 Decrypted file name:", name);
       log("🔓 Decrypted plaintext:", pt);
+      $('#pt').value = pt;
     } catch (e) { log("❌ Decrypt error:", e.message); }
   };
 
-  document.querySelector('#register').onclick = doRegister;
-  document.querySelector('#authenticate').onclick = doAuthenticate;
+  $('#register').onclick = doRegister;
+  $('#authenticate').onclick = doAuthenticate;
 </script>
 
 </html>
