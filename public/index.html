@@ -60,7 +60,7 @@
   function randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
 
   // let credentialIdB64 = localStorage.getItem('credIdB64') || null;
-  let secretsB64 = {}; // loaded from largeBlob on authenticate
+  let secretsB64 = []; // loaded from largeBlob on authenticate
 
   // ---- WebAuthn helpers
   const rp = { id: location.hostname, name: "Demo RP" };
@@ -121,7 +121,7 @@
       if (assertion.getClientExtensionResults().largeBlob.written) {
         // keep a copy of the plaintext secret OUTSIDE only for demo encryption now;
         // in a real app, you could also encrypt data right after create() and store ciphertext server-side.
-        secretsB64[assertion.id] = b64(secret);
+        secretsB64.push(b64(secret));
         $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last from registration)";
         $("#authState").className = "ok";
         log("🔐 Secret (32B) written to largeBlob.");
@@ -154,7 +154,7 @@
       const assertion = await navigator.credentials.get({ publicKey });
       const clientExt = assertion.getClientExtensionResults();
       if (clientExt && clientExt.largeBlob && clientExt.largeBlob.blob) {
-        secretsB64[assertion.id] = b64(clientExt.largeBlob.blob); // ArrayBuffer -> b64
+        secretsB64.push(b64(clientExt.largeBlob.blob)); // ArrayBuffer -> b64
         $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last from authentication)";
         $("#authState").className = "ok";
         log("✅ Authenticated. Read secret from largeBlob (" + (clientExt.largeBlob.blob.byteLength) + " bytes).");
@@ -169,10 +169,11 @@
     const secret = randBytes(32); // store this in largeBlob
     const secretId = randBytes(8); // store this in largeBlob
 
-    secretsB64[b64(secretId)] = b64(secret); // ArrayBuffer -> b64
+    const secretB64 = b64(secret); // ArrayBuffer -> b64
+    secretsB64.push(secretB64);
     $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last fake)";
     $("#authState").className = "ok";
-    log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretsB64[b64(secretId)]);
+    log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
   }
 
   /* ===== Key derivation (HKDF-SHA256) from largeBlob secret ===== */
@@ -223,7 +224,7 @@
 
   async function doEncrypt() {
     try {
-      const secretB64 = Object.entries(secretsB64)[0][1]; // Picking up first secret loaded for encryption
+      const secretB64 = secretsB64[0]; // Picking up first secret loaded for encryption
       const name = "some file name";
       const secretRaw = ubuf(secretB64);
       const salt = randBytes(16);
@@ -247,7 +248,7 @@
 
   async function doDecrypt() {
     try {
-      const secretB64 = Object.entries(secretsB64)[0][1]; // Picking up first secret loaded for decryption
+      const secretB64 = secretsB64[0]; // Picking up first secret loaded for decryption
       const secretRaw = ubuf(secretB64);
       const data = new Uint8Array(ubuf($('#ct').value));
       const { salt, iv, name, bodyOffset } = parseHeader(data);
