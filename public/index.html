@@ -50,346 +50,92 @@
 <div id="log"></div>
 
 <script>
-  const $ = sel => document.querySelector(sel);
+
+  const $ = (sel) => { return document.querySelector(sel); };
   const log = (...a) => { $('#log').textContent += a.join(' ') + "\n"; };
-  const enc = new TextEncoder(), dec = new TextDecoder();
-  const b64 = ab => btoa(String.fromCharCode(...new Uint8Array(ab)));
-  const ubuf = b64s => Uint8Array.from(atob(b64s), c => c.charCodeAt(0)).buffer;
-  function be16(n) { return new Uint8Array([(n >>> 8) & 0xff, n & 0xff]); }
-  function readBE16(u8, off) { return (u8[off] << 8) | u8[off + 1]; }
-  function randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
 
-  // let credentialIdB64 = localStorage.getItem('credIdB64') || null;
-  let secretsB64 = []; // loaded from largeBlob on authenticate
+  async function init() {
 
-  // ---- WebAuthn helpers
-  const rp = { id: location.hostname, name: "Demo RP" };
-  const user = { id: randBytes(16), name: "jay@mac.home", displayName: "Jay" };
 
-  // ---- Registration: create credential AND write largeBlob (32-byte secret)
-  async function doRegister() {
-    // see https://github.com/w3c/webauthn/wiki/Explainer:-WebAuthn-Large-Blob-Extension
+    Texcret.log = log;
 
-    const cred = await navigator.credentials.create({
-      publicKey: {
-        challenge: randBytes(32),
-        rp,
-        user,
-        pubKeyCredParams: [{ type: "public-key", alg: -7 }], // ES256
-        authenticatorSelection: {
-          // authenticatorAttachment: "platform",   // <- Limiting to only passkey on iOS
-          residentKey: "preferred",
-          userVerification: "preferred",
-        },
-        timeout: 60000,
-        attestation: "none",
-        extensions: {
-          largeBlob: { support: "required" }
-        }
-      }
-    });
+    Texcret.setRPName("Tex(t Se)cret Demo");
+    Texcret.setUser("jay@example.com", "Jay");
 
-    credentialIdB64 = b64(cred.rawId);
-    // localStorage.setItem('credIdB64', credentialIdB64);
-    log("✅ Registered credential. ID:", credentialIdB64);
+    let secretsLoaded = 0;
 
-    if (!cred.getClientExtensionResults().largeBlob) {
-      log("❌ Large blob not supported by the user agent.");
-      return;
-    } else {
-      log("✅  Large blob is supported by the user agent.");
-    }
-
-    try {
-      const secret = randBytes(32); // store this in largeBlob
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge: randBytes(32),
-          // allowCredentials: [{
-          //   type: "public-key",
-          //   id: ubuf(credentialIdB64),
-          //   //transports: ["nfc", "usb", "ble"] // <-- Limiting to Yubikey only
-          // }],
-          userVerification: "preferred",
-          timeout: 60000,
-          extensions: {
-            largeBlob: { write: new Uint8Array(secret) }
-          }
-        }
+    async function doRegister() {
+      await Texcret.registerNewCredentialAndLoadSecret(onSecretLoaded = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last from registration)";
+        $("#authState").className = "ok";
       });
+    }
 
-      if (assertion.getClientExtensionResults().largeBlob.written) {
-        // keep a copy of the plaintext secret OUTSIDE only for demo encryption now;
-        // in a real app, you could also encrypt data right after create() and store ciphertext server-side.
-        secretsB64.push(b64(secret));
-        $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last from registration)";
+    async function doAuthenticate() {
+      await Texcret.authenticateAndLoadSecret(onSecretLoaded = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last from authentication)";
         $("#authState").className = "ok";
-        log("🔐 Secret (32B) written to largeBlob.");
-      } else {
-        // The large blob could not be written (e.g. because of a lack of space).
-        // The assertion is still valid.
-        log("❌ The large blob could not be written");
+      });
+    }
+
+    async function doEncrypt() {
+      const data = Texcret.enc.encode($("#pt").value);
+      const out = await Texcret.encrypt(data, "some file name");
+      $("#ct").value = Texcret.b64(out.buffer);
+    }
+
+    async function doDecrypt() {
+      const data = new Uint8Array(Texcret.ubuf($("#ct").value));
+      const res = await Texcret.decrypt(data);
+      const pt = Texcret.dec.decode(res.buffer);
+      Texcret.log("🔓 Decrypted plaintext:", pt);
+      $("#pt").value = pt;
+    }
+
+    // ---- Fake: generate random secret (not stored anywhere)
+    async function doFake() {
+      const secret = Texcret.randBytes(32); // store this in largeBlob
+      const secretB64 = Texcret.b64(secret); // ArrayBuffer -> b64
+      Texcret.secretsB64.push(secretB64);
+      $("#authState").textContent = "" + (Texcret.secretsB64.length) + " secret(s): loaded (last fake)";
+      $("#authState").className = "ok";
+      Texcret.log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
+    }
+
+    /* ======= shuffle array https://en.wikipedia.org/wiki/Fisher–Yates_shuffle ====== */
+    function shuffle(array) {
+
+      let currentIndex = array.length;
+
+      // While there remain elements to shuffle...
+      while (currentIndex != 0) {
+
+        // Pick a remaining element...
+        let randomIndex = Math.floor(Math.random() * currentIndex);
+        currentIndex--;
+
+        // And swap it with the current element.
+        [array[currentIndex], array[randomIndex]] = [
+          array[randomIndex], array[currentIndex]];
       }
-    } catch (e) { log("❌ Secret store failed:", e.message); console.error(e); }
-  }
+    }
 
-  // ---- Authentication: get assertion AND read largeBlob back
-  async function doAuthenticate() {
-    // if (!credentialIdB64) { return log("⚠️ No credential; register first."); }
-
-    const publicKey = {
-      challenge: randBytes(32),
-      // allowCredentials: [{
-      //   type: "public-key",
-      //   id: ubuf(credentialIdB64),
-      //   // transports: ["nfc", "usb", "ble"] // <-- Limiting to Yubikey only
-      // }],
-      userVerification: "preferred",
-      timeout: 60000,
-      // Ask to read the largeBlob
-      extensions: { largeBlob: { read: true } }
+    $('#decrypt').onclick = doDecrypt;
+    $('#encrypt').onclick = doEncrypt;
+    $('#register').onclick = doRegister;
+    $('#authenticate').onclick = doAuthenticate;
+    $('#fake').onclick = doFake;
+    $('#shuffle').onclick = () => {
+      x = Texcret.secretsB64;
+      shuffle(x);
+      Texcret.secretsB64 = x;
+      console.log(Texcret.secretsB64);
     };
-
-    try {
-      const assertion = await navigator.credentials.get({ publicKey });
-      const clientExt = assertion.getClientExtensionResults();
-      if (clientExt && clientExt.largeBlob && clientExt.largeBlob.blob) {
-        secretsB64.push(b64(clientExt.largeBlob.blob)); // ArrayBuffer -> b64
-        $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last from authentication)";
-        $("#authState").className = "ok";
-        log("✅ Authenticated. Read secret from largeBlob (" + (clientExt.largeBlob.blob.byteLength) + " bytes).");
-      } else {
-        log("⚠️ Auth OK but largeBlob read not returned (not supported or not present).");
-      }
-    } catch (e) { log("❌ Authentication failed:", e.message); console.error(e); }
   }
-
-  // ---- Fake: generate random secret (not stored anywhere)
-  async function doFake() {
-    const secret = randBytes(32); // store this in largeBlob
-    const secretId = randBytes(8); // store this in largeBlob
-
-    const secretB64 = b64(secret); // ArrayBuffer -> b64
-    secretsB64.push(secretB64);
-    $("#authState").textContent = "" + (Object.keys(secretsB64).length) + " secret(s): loaded (last fake)";
-    $("#authState").className = "ok";
-    log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
-  }
-
-  /* ===== Key derivation (HKDF-SHA256) from largeBlob secret ===== */
-  async function deriveAesKey(secretRaw, salt) {
-    const ikm = await crypto.subtle.importKey("raw", secretRaw, "HKDF", false, ["deriveKey"]);
-    return crypto.subtle.deriveKey(
-      { name: "HKDF", hash: "SHA-256", salt, info: enc.encode("YK-largeBlob-text") },
-      ikm,
-      { name: "AES-GCM", length: 256 },
-      false,
-      ["encrypt", "decrypt"]
-    );
-  }
-
-  /* ====== Header v2 (multiple recipients) ======
-   * MAGIC: "YKLB2\0" (6 bytes)
-   * 0..5     : MAGIC
-   * 6..17    : dataIv (12 bytes)   // IV used to encrypt the plaintext
-   * 18..19   : nameLen (uint16 BE)
-   * 20..(20+nameLen-1): filename UTF-8
-   * next 2   : recipCount (uint16 BE)
-   * Then for each recipient i in [0..recipCount-1]:
-   *   salt (16 bytes)              // HKDF salt for this recipient
-   *   wrapIv (12 bytes)            // AES-GCM IV for wrapping the data key
-   *   wrapLen (uint16 BE)          // length of wrappedKey bytes
-   *   wrappedKey (wrapLen bytes)   // AES-GCM( derivedKey ; dataKeyRaw )
-   * After recipients block:
-   *   ciphertext (AES-GCM over plaintext using dataKey & dataIv)
-   */
-  const MAGIC2 = new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x32, 0x00]); // "YKLB2\0"
-
-  /* ---- build header (without ciphertext) ---- */
-  function makeHeaderV2(dataIv, name, recipEntries) {
-    const nameUtf8 = enc.encode(name);
-    const nameLen = nameUtf8.length;
-
-    // Compute total size
-    let size = 6 + 12 + 2 + nameLen + 2; // magic + dataIv + nameLen + name + recipCount
-    for (const r of recipEntries) {
-      size += 16 + 12 + 2 + r.wrappedKey.length; // salt + wrapIv + wrapLen + wrappedKey
-    }
-
-    const head = new Uint8Array(size);
-    let off = 0;
-
-    head.set(MAGIC2, off); off += 6;
-    head.set(dataIv, off); off += 12;
-    head.set(be16(nameLen), off); off += 2;
-    head.set(nameUtf8, off); off += nameLen;
-
-    head.set(be16(recipEntries.length), off); off += 2;
-
-    for (const r of recipEntries) {
-      head.set(r.salt, off); off += 16;
-      head.set(r.wrapIv, off); off += 12;
-      head.set(be16(r.wrappedKey.length), off); off += 2;
-      head.set(r.wrappedKey, off); off += r.wrappedKey.length;
-    }
-    return head;
-  }
-
-  /* ---- parse header (returns meta + offset to ciphertext) ---- */
-  function parseHeaderV2(u8) {
-    for (let i = 0; i < 6; i++) {
-      if (u8[i] !== MAGIC2[i]) throw new Error("Bad magic / not a YKLB2 file");
-    }
-    let off = 6;
-    const dataIv = u8.slice(off, off + 12); off += 12;
-
-    const nameLen = readBE16(u8, off); off += 2;
-    const nameBytes = u8.slice(off, off + nameLen); off += nameLen;
-    const name = dec.decode(nameBytes);
-
-    const recipCount = readBE16(u8, off); off += 2;
-    const recipients = [];
-    for (let i = 0; i < recipCount; i++) {
-      const salt = u8.slice(off, off + 16); off += 16;
-      const wrapIv = u8.slice(off, off + 12); off += 12;
-      const wrapLen = readBE16(u8, off); off += 2;
-      const wrappedKey = u8.slice(off, off + wrapLen); off += wrapLen;
-      recipients.push({ salt, wrapIv, wrappedKey });
-    }
-
-    return { dataIv, name, recipients, bodyOffset: off };
-  }
-
-  /* ====== Encrypt flow ====== */
-  async function doEncrypt() {
-    try {
-      // 1) Generate a fresh AES-GCM-256 data key for the plaintext
-      const dataKey = await crypto.subtle.generateKey(
-        { name: "AES-GCM", length: 256 },
-      /* extractable */ true,
-        ["encrypt", "decrypt"]
-      );
-      const dataKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", dataKey)); // 32 bytes
-
-      const name = "some file name";
-      const pt = enc.encode($('#pt').value);
-      const dataIv = randBytes(12);
-
-      // 2) Encrypt plaintext with data key
-      const ct = new Uint8Array(
-        await crypto.subtle.encrypt({ name: "AES-GCM", iv: dataIv }, dataKey, pt)
-      );
-
-      // 3) For each secret, derive key and wrap dataKeyRaw via AES-GCM
-      const recipEntries = [];
-      for (const secretB64 of secretsB64) {
-        const secretRaw = ubuf(secretB64);
-        const salt = randBytes(16);
-        const wrapIv = randBytes(12);
-        const wrapKey = await deriveAesKey(secretRaw, salt);
-        const wrappedKey = new Uint8Array(
-          await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapIv }, wrapKey, dataKeyRaw)
-        );
-        recipEntries.push({ salt, wrapIv, wrappedKey });
-      }
-
-      // 4) Build header + output
-      const header = makeHeaderV2(dataIv, name, recipEntries);
-      const out = new Uint8Array(header.length + ct.length);
-      out.set(header, 0);
-      out.set(ct, header.length);
-
-      $('#ct').value = b64(out.buffer);
-      log("🔒 Encrypted with a fresh data key and wrapped for", recipEntries.length, "recipient(s).");
-      log("iv (data): ", b64(dataIv.buffer));
-      log("name: ", name);
-    } catch (e) {
-      log("❌ Encrypt error:", e.message);
-    }
-  }
-
-  /* ====== Decrypt flow (tries all secrets & recipients) ====== */
-  async function doDecrypt() {
-    try {
-      const data = new Uint8Array(ubuf($('#ct').value));
-      const { dataIv, name, recipients, bodyOffset } = parseHeaderV2(data);
-      const ct = data.slice(bodyOffset);
-
-      log("name: ", name);
-      log("recipients in header: ", recipients.length);
-
-      // Try to unwrap the data key using each provided secret against each recipient entry
-      let dataKey = null;
-
-      outer:
-      for (const secretB64 of secretsB64) {
-        const secretRaw = ubuf(secretB64);
-
-        for (const r of recipients) {
-          try {
-            const wrapKey = await deriveAesKey(secretRaw, r.salt);
-            const dataKeyRaw = new Uint8Array(
-              await crypto.subtle.decrypt({ name: "AES-GCM", iv: r.wrapIv }, wrapKey, r.wrappedKey)
-            );
-            dataKey = await crypto.subtle.importKey(
-              "raw",
-              dataKeyRaw,
-              { name: "AES-GCM" },
-              false,
-              ["decrypt"]
-            );
-            log("✅ Unwrapped data key with one of your secrets.");
-            break outer; // success
-          } catch (_) {
-            log("🔁 Wrong secret for this recipient; keep trying.")
-          }
-        }
-      }
-
-      if (!dataKey) {
-        throw new Error("None of the provided secrets could unwrap the data key.");
-      }
-
-      // Decrypt the payload
-      const ptBuf = new Uint8Array(
-        await crypto.subtle.decrypt({ name: "AES-GCM", iv: dataIv }, dataKey, ct)
-      );
-      const pt = dec.decode(ptBuf);
-
-      log("🔓 Decrypted file name:", name);
-      log("🔓 Decrypted plaintext:", pt);
-      $('#pt').value = pt;
-    } catch (e) {
-      log("❌ Decrypt error:", e.message);
-    }
-  };
-
-  /* ======= shuffle array https://en.wikipedia.org/wiki/Fisher–Yates_shuffle ====== */
-  function shuffle(array) {
-
-    let currentIndex = array.length;
-
-    // While there remain elements to shuffle...
-    while (currentIndex != 0) {
-
-      // Pick a remaining element...
-      let randomIndex = Math.floor(Math.random() * currentIndex);
-      currentIndex--;
-
-      // And swap it with the current element.
-      [array[currentIndex], array[randomIndex]] = [
-        array[randomIndex], array[currentIndex]];
-    }
-  }
-
-  $('#decrypt').onclick = doDecrypt;
-  $('#encrypt').onclick = doEncrypt;
-  $('#register').onclick = doRegister;
-  $('#authenticate').onclick = doAuthenticate;
-  $('#fake').onclick = doFake;
-  $('#shuffle').onclick = () => {
-    shuffle(secretsB64);
-  };
 </script>
+
+<script defer src="texcret.js" onload="init();"></script>
 
 </html>
