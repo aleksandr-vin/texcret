@@ -17,7 +17,7 @@ window.Texcret = {
   readBE16(u8, off) { return (u8[off] << 8) | u8[off + 1]; },
   randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; },
 
-  secretsB64: [], // loaded from largeBlob on authenticate
+  _secretsB64: [], // loaded from largeBlob on authenticate
 
   // Default RP/user (can be overridden via setters)
   rp: null, // { id: location.hostname, name: "Tex(t Se)cret Amnesiac" },
@@ -81,7 +81,7 @@ window.Texcret = {
 
       if (assertion.getClientExtensionResults().largeBlob.written) {
         // demo-only: keep plaintext copy in memory
-        this.secretsB64.push(this.b64(secret.buffer));
+        this._secretsB64.push(this.b64(secret.buffer));
         onSecretLoaded && onSecretLoaded();
         this.log("🔐 Secret (32B) written to largeBlob.");
       } else {
@@ -106,7 +106,7 @@ window.Texcret = {
       const assertion = await navigator.credentials.get({ publicKey });
       const clientExt = assertion.getClientExtensionResults();
       if (clientExt && clientExt.largeBlob && clientExt.largeBlob.blob) {
-        this.secretsB64.push(this.b64(clientExt.largeBlob.blob)); // ArrayBuffer -> b64
+        this._secretsB64.push(this.b64(clientExt.largeBlob.blob)); // ArrayBuffer -> b64
         onSecretLoaded && onSecretLoaded();
         this.log("✅ Authenticated. Read secret from largeBlob (" + clientExt.largeBlob.blob.byteLength + " bytes).");
       } else {
@@ -213,7 +213,7 @@ window.Texcret = {
 
       // 3) wrap dataKeyRaw for each secret
       const recipEntries = [];
-      for (const secretB64 of this.secretsB64) {
+      for (const secretB64 of this._secretsB64) {
         const secretRaw = this.ubuf(secretB64);
         const salt = this.randBytes(16);
         const wrapIv = this.randBytes(12);
@@ -252,7 +252,7 @@ window.Texcret = {
       let dataKey = null;
 
       outer:
-      for (const secretB64 of this.secretsB64) {
+      for (const secretB64 of this._secretsB64) {
         const secretRaw = this.ubuf(secretB64);
         for (const r of recipients) {
           try {

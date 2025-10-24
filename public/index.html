@@ -98,8 +98,8 @@
     async function doFake() {
       const secret = Texcret.randBytes(32); // store this in largeBlob
       const secretB64 = Texcret.b64(secret); // ArrayBuffer -> b64
-      Texcret.secretsB64.push(secretB64);
-      $("#authState").textContent = "" + (Texcret.secretsB64.length) + " secret(s): loaded (last fake)";
+      Texcret._secretsB64.push(secretB64);
+      $("#authState").textContent = "" + (Texcret._secretsB64.length) + " secret(s): loaded (last fake)";
       $("#authState").className = "ok";
       Texcret.log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
     }
@@ -128,10 +128,10 @@
     $('#authenticate').onclick = doAuthenticate;
     $('#fake').onclick = doFake;
     $('#shuffle').onclick = () => {
-      x = Texcret.secretsB64;
+      x = Texcret._secretsB64;
       shuffle(x);
-      Texcret.secretsB64 = x;
-      console.log(Texcret.secretsB64);
+      Texcret._secretsB64 = x;
+      console.log(Texcret._secretsB64);
     };
   }
 </script>
