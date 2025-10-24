@@ -12,4 +12,3 @@ key_pem=$(echo $(hostname)*-key.pem)
 
 
 uvicorn app:app --host 0.0.0.0 --port 443 --ssl-keyfile ${key_pem} --ssl-certfile ${key_pem%-key.pem}.pem
-

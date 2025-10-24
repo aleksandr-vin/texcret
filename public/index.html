@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="en">
 <meta charset="utf-8" />
-<title>YubiKey NFC + largeBlob demo</title>
+<title>Tex(t Se)cret demo</title>
 <style>
   body {
     font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
@@ -21,11 +21,12 @@
     border-radius: 8px;
   }
 </style>
-<h2>YubiKey NFC largeBlob demo</h2>
+<h2>Tex(t Se)cret demo</h2>
 <p>Register writes a secret into the key’s largeBlob; Authenticate reads it and decrypts.</p>
 
 <p><button id="register">Register key + store secret</button></p>
 <p><button id="authenticate">Authenticate + read secret</button></p>
+<p><button id="fake">Fake secret</button></p>
 <p><button id="encrypt">Encrypt sample text (with stored secret)</button></p>
 <p><button id="decrypt">Decrypt sample text</button></p>
 
@@ -36,13 +37,13 @@
     <label for="pt">Plaintext:</label>
   </p>
   <p>
-    <input name="pt" id="pt" value="hello from the sea 🐬" />
+    <textarea name="pt" id="pt" value="" rows="3" cols="60">hello from the sea 🐬</textarea>
   </p>
   <p>
     <label for="ct">Ciphertext (base64):</label>
   </p>
   <p>
-    <input name="ct" id="ct" size="60" />
+    <textarea name="ct" id="ct" value="" rows="3" cols="60"></textarea>
   </p>
 </div>
 
@@ -58,7 +59,7 @@
   function readBE16(u8, off) { return (u8[off] << 8) | u8[off + 1]; }
   function randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; }
 
-  let credentialIdB64 = localStorage.getItem('credIdB64') || null;
+  // let credentialIdB64 = localStorage.getItem('credIdB64') || null;
   let secretB64 = null; // loaded from largeBlob on authenticate
 
   // ---- WebAuthn helpers
@@ -89,7 +90,7 @@
     });
 
     credentialIdB64 = b64(cred.rawId);
-    localStorage.setItem('credIdB64', credentialIdB64);
+    // localStorage.setItem('credIdB64', credentialIdB64);
     log("✅ Registered credential. ID:", credentialIdB64);
 
     if (!cred.getClientExtensionResults().largeBlob) {
@@ -104,8 +105,6 @@
       const assertion = await navigator.credentials.get({
         publicKey: {
           challenge: randBytes(32),
-          rp,
-          user,
           // allowCredentials: [{
           //   type: "public-key",
           //   id: ubuf(credentialIdB64),
@@ -140,8 +139,6 @@
 
     const publicKey = {
       challenge: randBytes(32),
-      rp,
-      user,
       // allowCredentials: [{
       //   type: "public-key",
       //   id: ubuf(credentialIdB64),
@@ -165,6 +162,16 @@
         log("⚠️ Auth OK but largeBlob read not returned (not supported or not present).");
       }
     } catch (e) { log("❌ Authentication failed:", e.message); console.error(e); }
+  }
+
+  // ---- Fake: generate random secret (not stored anywhere)
+  async function doFake() {
+    const secret = randBytes(32); // store this in largeBlob
+
+    secretB64 = b64(secret); // ArrayBuffer -> b64
+    $("#authState").textContent = "secret: loaded (fake)";
+    $("#authState").className = "ok";
+    log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
   }
 
   /* ===== Key derivation (HKDF-SHA256) from largeBlob secret ===== */
@@ -265,6 +272,7 @@
 
   $('#register').onclick = doRegister;
   $('#authenticate').onclick = doAuthenticate;
+  $('#fake').onclick = doFake;
 </script>
 
 </html>
