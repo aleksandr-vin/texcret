@@ -26,7 +26,7 @@
 
 <p><button id="register">Register key + store secret</button></p>
 <p><button id="authenticate">Authenticate + read secret</button></p>
-<p><button id="fake">Fake secret</button></p>
+<p><button id="fake">Fake secret</button>&nbsp;<button id="shuffle">Shuffle secrets</button></p>
 <p><button id="encrypt">Encrypt sample text (with stored secret)</button></p>
 <p><button id="decrypt">Decrypt sample text</button></p>
 
@@ -43,7 +43,7 @@
     <label for="ct">Ciphertext (base64):</label>
   </p>
   <p>
-    <textarea name="ct" id="ct" value="" rows="3" cols="60"></textarea>
+    <textarea name="ct" id="ct" value="" rows="6" cols="60"></textarea>
   </p>
 </div>
 
@@ -188,88 +188,208 @@
     );
   }
 
-  /* ===== File format =====
-  * Header:
-  *   0..5    : ASCII "YKLB1\0" (6 bytes, NUL terminator)
-  *   6..21   : salt (16 bytes)
-  *   22..33  : iv (12 bytes)
-  *   34..35  : nameLen (uint16 BE)
-  *   36..(36+nameLen-1): filename UTF-8
-  *   ...     : ciphertext (AES-GCM)
-  */
-  const MAGIC = new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x31, 0x00]); // "YKLB1\0"
+  /* ====== Header v2 (multiple recipients) ======
+   * MAGIC: "YKLB2\0" (6 bytes)
+   * 0..5     : MAGIC
+   * 6..17    : dataIv (12 bytes)   // IV used to encrypt the plaintext
+   * 18..19   : nameLen (uint16 BE)
+   * 20..(20+nameLen-1): filename UTF-8
+   * next 2   : recipCount (uint16 BE)
+   * Then for each recipient i in [0..recipCount-1]:
+   *   salt (16 bytes)              // HKDF salt for this recipient
+   *   wrapIv (12 bytes)            // AES-GCM IV for wrapping the data key
+   *   wrapLen (uint16 BE)          // length of wrappedKey bytes
+   *   wrappedKey (wrapLen bytes)   // AES-GCM( derivedKey ; dataKeyRaw )
+   * After recipients block:
+   *   ciphertext (AES-GCM over plaintext using dataKey & dataIv)
+   */
+  const MAGIC2 = new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x32, 0x00]); // "YKLB2\0"
 
-  function makeHeader(salt, iv, name) {
+  /* ---- build header (without ciphertext) ---- */
+  function makeHeaderV2(dataIv, name, recipEntries) {
     const nameUtf8 = enc.encode(name);
     const nameLen = nameUtf8.length;
-    const head = new Uint8Array(36 + nameLen);
-    head.set(MAGIC, 0);
-    head.set(salt, 6);
-    head.set(iv, 22);
-    head.set(be16(nameLen), 34);
-    head.set(nameUtf8, 36);
+
+    // Compute total size
+    let size = 6 + 12 + 2 + nameLen + 2; // magic + dataIv + nameLen + name + recipCount
+    for (const r of recipEntries) {
+      size += 16 + 12 + 2 + r.wrappedKey.length; // salt + wrapIv + wrapLen + wrappedKey
+    }
+
+    const head = new Uint8Array(size);
+    let off = 0;
+
+    head.set(MAGIC2, off); off += 6;
+    head.set(dataIv, off); off += 12;
+    head.set(be16(nameLen), off); off += 2;
+    head.set(nameUtf8, off); off += nameLen;
+
+    head.set(be16(recipEntries.length), off); off += 2;
+
+    for (const r of recipEntries) {
+      head.set(r.salt, off); off += 16;
+      head.set(r.wrapIv, off); off += 12;
+      head.set(be16(r.wrappedKey.length), off); off += 2;
+      head.set(r.wrappedKey, off); off += r.wrappedKey.length;
+    }
     return head;
   }
 
-  function parseHeader(u8) {
-    for (let i = 0; i < 6; i++) { if (u8[i] !== MAGIC[i]) throw new Error("Bad magic / not a YKLB1 file"); }
-    const salt = u8.slice(6, 22);
-    const iv = u8.slice(22, 34);
-    const nameLen = readBE16(u8, 34);
-    const nameBytes = u8.slice(36, 36 + nameLen);
+  /* ---- parse header (returns meta + offset to ciphertext) ---- */
+  function parseHeaderV2(u8) {
+    for (let i = 0; i < 6; i++) {
+      if (u8[i] !== MAGIC2[i]) throw new Error("Bad magic / not a YKLB2 file");
+    }
+    let off = 6;
+    const dataIv = u8.slice(off, off + 12); off += 12;
+
+    const nameLen = readBE16(u8, off); off += 2;
+    const nameBytes = u8.slice(off, off + nameLen); off += nameLen;
     const name = dec.decode(nameBytes);
-    const bodyOffset = 36 + nameLen;
-    return { salt, iv, name, bodyOffset };
+
+    const recipCount = readBE16(u8, off); off += 2;
+    const recipients = [];
+    for (let i = 0; i < recipCount; i++) {
+      const salt = u8.slice(off, off + 16); off += 16;
+      const wrapIv = u8.slice(off, off + 12); off += 12;
+      const wrapLen = readBE16(u8, off); off += 2;
+      const wrappedKey = u8.slice(off, off + wrapLen); off += wrapLen;
+      recipients.push({ salt, wrapIv, wrappedKey });
+    }
+
+    return { dataIv, name, recipients, bodyOffset: off };
   }
 
+  /* ====== Encrypt flow ====== */
   async function doEncrypt() {
     try {
-      const secretB64 = secretsB64[0]; // Picking up first secret loaded for encryption
-      const name = "some file name";
-      const secretRaw = ubuf(secretB64);
-      const salt = randBytes(16);
-      const iv = randBytes(12);
-      log("salt: ", b64(salt.buffer));
-      log("iv: ", b64(iv.buffer));
-      log("name: ", name);
-      const key = await deriveAesKey(secretRaw, salt);
-      const pt = enc.encode($('#pt').value);
-      const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, pt));
-      const header = makeHeader(salt, iv, name);
+      // 1) Generate a fresh AES-GCM-256 data key for the plaintext
+      const dataKey = await crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+      /* extractable */ true,
+        ["encrypt", "decrypt"]
+      );
+      const dataKeyRaw = new Uint8Array(await crypto.subtle.exportKey("raw", dataKey)); // 32 bytes
 
+      const name = "some file name";
+      const pt = enc.encode($('#pt').value);
+      const dataIv = randBytes(12);
+
+      // 2) Encrypt plaintext with data key
+      const ct = new Uint8Array(
+        await crypto.subtle.encrypt({ name: "AES-GCM", iv: dataIv }, dataKey, pt)
+      );
+
+      // 3) For each secret, derive key and wrap dataKeyRaw via AES-GCM
+      const recipEntries = [];
+      for (const secretB64 of secretsB64) {
+        const secretRaw = ubuf(secretB64);
+        const salt = randBytes(16);
+        const wrapIv = randBytes(12);
+        const wrapKey = await deriveAesKey(secretRaw, salt);
+        const wrappedKey = new Uint8Array(
+          await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapIv }, wrapKey, dataKeyRaw)
+        );
+        recipEntries.push({ salt, wrapIv, wrappedKey });
+      }
+
+      // 4) Build header + output
+      const header = makeHeaderV2(dataIv, name, recipEntries);
       const out = new Uint8Array(header.length + ct.length);
       out.set(header, 0);
       out.set(ct, header.length);
 
       $('#ct').value = b64(out.buffer);
-      log("🔒 Encrypted with largeBlob secret.");
-    } catch (e) { log("❌ Encrypt error:", e.message); }
-  };
+      log("🔒 Encrypted with a fresh data key and wrapped for", recipEntries.length, "recipient(s).");
+      log("iv (data): ", b64(dataIv.buffer));
+      log("name: ", name);
+    } catch (e) {
+      log("❌ Encrypt error:", e.message);
+    }
+  }
 
+  /* ====== Decrypt flow (tries all secrets & recipients) ====== */
   async function doDecrypt() {
     try {
-      const secretB64 = secretsB64[0]; // Picking up first secret loaded for decryption
-      const secretRaw = ubuf(secretB64);
       const data = new Uint8Array(ubuf($('#ct').value));
-      const { salt, iv, name, bodyOffset } = parseHeader(data);
-      log("salt: ", b64(salt));
-      log("iv: ", b64(iv));
-      log("name: ", name);
-      const key = await deriveAesKey(secretRaw, salt);
+      const { dataIv, name, recipients, bodyOffset } = parseHeaderV2(data);
       const ct = data.slice(bodyOffset);
-      const ptBuf = new Uint8Array(await crypto.subtle.decrypt({ name: "AES-GCM", iv }, key, ct));
+
+      log("name: ", name);
+      log("recipients in header: ", recipients.length);
+
+      // Try to unwrap the data key using each provided secret against each recipient entry
+      let dataKey = null;
+
+      outer:
+      for (const secretB64 of secretsB64) {
+        const secretRaw = ubuf(secretB64);
+
+        for (const r of recipients) {
+          try {
+            const wrapKey = await deriveAesKey(secretRaw, r.salt);
+            const dataKeyRaw = new Uint8Array(
+              await crypto.subtle.decrypt({ name: "AES-GCM", iv: r.wrapIv }, wrapKey, r.wrappedKey)
+            );
+            dataKey = await crypto.subtle.importKey(
+              "raw",
+              dataKeyRaw,
+              { name: "AES-GCM" },
+              false,
+              ["decrypt"]
+            );
+            log("✅ Unwrapped data key with one of your secrets.");
+            break outer; // success
+          } catch (_) {
+            log("🔁 Wrong secret for this recipient; keep trying.")
+          }
+        }
+      }
+
+      if (!dataKey) {
+        throw new Error("None of the provided secrets could unwrap the data key.");
+      }
+
+      // Decrypt the payload
+      const ptBuf = new Uint8Array(
+        await crypto.subtle.decrypt({ name: "AES-GCM", iv: dataIv }, dataKey, ct)
+      );
       const pt = dec.decode(ptBuf);
+
       log("🔓 Decrypted file name:", name);
       log("🔓 Decrypted plaintext:", pt);
       $('#pt').value = pt;
-    } catch (e) { log("❌ Decrypt error:", e.message); }
+    } catch (e) {
+      log("❌ Decrypt error:", e.message);
+    }
   };
+
+  /* ======= shuffle array https://en.wikipedia.org/wiki/Fisher–Yates_shuffle ====== */
+  function shuffle(array) {
+
+    let currentIndex = array.length;
+
+    // While there remain elements to shuffle...
+    while (currentIndex != 0) {
+
+      // Pick a remaining element...
+      let randomIndex = Math.floor(Math.random() * currentIndex);
+      currentIndex--;
+
+      // And swap it with the current element.
+      [array[currentIndex], array[randomIndex]] = [
+        array[randomIndex], array[currentIndex]];
+    }
+  }
 
   $('#decrypt').onclick = doDecrypt;
   $('#encrypt').onclick = doEncrypt;
   $('#register').onclick = doRegister;
   $('#authenticate').onclick = doAuthenticate;
   $('#fake').onclick = doFake;
+  $('#shuffle').onclick = () => {
+    shuffle(secretsB64);
+  };
 </script>
 
 </html>
