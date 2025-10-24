@@ -47,6 +47,17 @@
   </p>
 </div>
 
+<p class="texcreted">
+  WUtMQjIAHs04KM7YT67+/V9YAA5zb21lIGZpbGUgbmFtZQABuO3+bQ6pCwvVVa+AbZ0WwfYWYxUMQcwCcdf0rQAwIt/KO+70mUK9xgk6lxeyf+sMn1EvZvMrNV+q1dtaEGYeUiAeJGXTTr9/Dn7DvNGM5jPtKFBND5geEBReHuisP9zF8GXMESnekvoCARLMam1ArTlnH4HMXQ==
+</p>
+
+<p class="texcreted">
+  WUtMQjIA9RnI7of/syU1zGfqAA5zb21lIGZpbGUgbmFtZQABg2mLmBBMhebKSN4/mmH/Fg6OtAS1Y8j7EIGI3gAwJohJb991Kc3yPEtIQoOdAXfuOzgeXSEeHbG0UbS3LG1rEsRXVP8iaUd3OuwcCy4bW7ImuyrmcNOOk96jwSgIQNhPVbWWVlwoBmWOhpQ9n+qH2bsy4xl+
+</p>
+
+<p><button id="decretex">Decretex</button></p>
+
+
 <div id="log"></div>
 
 <script>
@@ -83,15 +94,19 @@
     async function doEncrypt() {
       const data = Texcret.enc.encode($("#pt").value);
       const out = await Texcret.encrypt(data, "some file name");
-      $("#ct").value = Texcret.b64(out.buffer);
+      if (out) {
+        $("#ct").value = Texcret.b64(out.buffer);
+      }
     }
 
     async function doDecrypt() {
       const data = new Uint8Array(Texcret.ubuf($("#ct").value));
       const res = await Texcret.decrypt(data);
-      const pt = Texcret.dec.decode(res.buffer);
-      Texcret.log("🔓 Decrypted plaintext:", pt);
-      $("#pt").value = pt;
+      if (res) {
+        const pt = Texcret.dec.decode(res.buffer);
+        Texcret.log("🔓 Decrypted plaintext:", pt);
+        $("#pt").value = pt;
+      }
     }
 
     // ---- Fake: generate random secret (not stored anywhere)
@@ -102,6 +117,10 @@
       $("#authState").textContent = "" + (Texcret._secretsB64.length) + " secret(s): loaded (last fake)";
       $("#authState").className = "ok";
       Texcret.log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
+    }
+
+    async function doDecretex() {
+      await Texcret.decretex();
     }
 
     /* ======= shuffle array https://en.wikipedia.org/wiki/Fisher–Yates_shuffle ====== */
@@ -133,6 +152,7 @@
       Texcret._secretsB64 = x;
       console.log(Texcret._secretsB64);
     };
+    $('#decretex').onclick = doDecretex;
   }
 </script>
 

@@ -31,6 +31,13 @@ window.Texcret = {
     this.user = { id: this.randBytes(16), name, displayName };
   },
 
+  cleanSecrets() {
+    if (this._secretsB64.length > 0) {
+      this._secretsB64 = [];
+      this.log("🔐 Secrets removed.");
+    }
+  },
+
   // ---- Registration: create credential AND write largeBlob (32-byte secret)
   async registerNewCredentialAndLoadSecret(onSecretLoaded) {
     if (!this.rp) {
@@ -196,6 +203,10 @@ window.Texcret = {
 
   /* ====== Encrypt flow ====== */
   async encrypt(pt, name) {
+    if (this._secretsB64.length == 0) {
+      this.log("❌ No secrets loaded. Will not encrypt anything.");
+      return;
+    }
     try {
       // 1) fresh AES-GCM-256 data key
       const dataKey = await crypto.subtle.generateKey(
@@ -287,6 +298,33 @@ window.Texcret = {
       return { buffer: ptBuf, name };
     } catch (e) {
       this.log("❌ Decrypt error:", e.message);
+    }
+  },
+
+  /* ====== Decrypt text content of all .texcreted elements ====== */
+  async decretex() {
+    if (this._secretsB64.length == 0) {
+      this.log("⏩️ No secrets loaded. Authenticating...");
+      await this.authenticateAndLoadSecret();
+      if (this._secretsB64.length == 0) {
+        this.log("❌ No secrets loaded. Can't decretex.");
+        return;
+      }
+    }
+    try {
+      document.querySelectorAll('.texcreted').forEach(async el => {
+        const data = new Uint8Array(this.ubuf(el.textContent));
+        const res = await this.decrypt(data);
+        if (res) {
+          const pt = this.dec.decode(res.buffer);
+          this.log("🔓 Decrypted plaintext:", pt);
+          el.textContent = pt;
+        } else {
+          this.log("❌ Not decrypted texcreted text:", el.textContent);
+        }
+      });
+    } finally {
+      this.cleanSecrets();
     }
   },
 };
