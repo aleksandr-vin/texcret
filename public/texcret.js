@@ -18,6 +18,7 @@ window.Texcret = {
   randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; },
 
   _secretsB64: [], // loaded from largeBlob on authenticate
+  _password: null, // loaded by loadPassword() call
 
   // Default RP/user (can be overridden via setters)
   rp: null, // { id: location.hostname, name: "Tex(t Se)cret Amnesiac" },
@@ -124,6 +125,44 @@ window.Texcret = {
     }
   },
 
+  // ---- Store password
+  async loadPassword(password, onOk, onError) {
+    if (password.length < 8) {
+      this.log("❌ Password not loaded.");
+      onError && onError("❌ Password needs to be longer than 8 chars.");
+      return;
+    }
+    this._password = password;
+    onOk && onOk();
+    this.log("✅ Password loaded.");
+  },
+
+  /*
+    Format used here:
+      blob = base64( salt(16) || iv(12) || ciphertext )
+    Key derivation:
+      key = PBKDF2(passphrase, salt, iterations=200000, hash=SHA-256)
+      algorithm: AES-GCM with 12-byte IV
+  */
+  async deriveKeyFromPass(passphrase, salt) {
+    const passKey = await crypto.subtle.importKey(
+      "raw", this.enc.encode(passphrase), { name: "PBKDF2" }, false, ["deriveKey"]
+    );
+    // Use a large number of iterations for PBKDF2 for reasonable brute-force cost.
+    return await crypto.subtle.deriveKey(
+      {
+        name: "PBKDF2",
+        salt: salt,
+        iterations: 200_000,
+        hash: "SHA-256"
+      },
+      passKey,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"]
+    );
+  },
+
   /* ===== Key derivation (HKDF-SHA256) from largeBlob secret ===== */
   async deriveAesKey(secretRaw, salt) {
     const ikm = await crypto.subtle.importKey("raw", secretRaw, "HKDF", false, ["deriveKey"]);
@@ -203,7 +242,7 @@ window.Texcret = {
 
   /* ====== Encrypt flow ====== */
   async encrypt(pt, name) {
-    if (this._secretsB64.length == 0) {
+    if (this._secretsB64.length == 0 && this._password === null) {
       this.log("❌ No secrets loaded. Will not encrypt anything.");
       return;
     }
@@ -229,6 +268,16 @@ window.Texcret = {
         const salt = this.randBytes(16);
         const wrapIv = this.randBytes(12);
         const wrapKey = await this.deriveAesKey(secretRaw, salt);
+        const wrappedKey = new Uint8Array(
+          await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapIv }, wrapKey, dataKeyRaw)
+        );
+        recipEntries.push({ salt, wrapIv, wrappedKey });
+      }
+
+      if (this._password !== null) {
+        const salt = this.randBytes(16);
+        const wrapIv = this.randBytes(12);
+        const wrapKey = await this.deriveKeyFromPass(this._password, salt);
         const wrappedKey = new Uint8Array(
           await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapIv }, wrapKey, dataKeyRaw)
         );
@@ -281,13 +330,35 @@ window.Texcret = {
             this.log("✅ Unwrapped data key with one of your secrets.");
             break outer;
           } catch (_) {
-            this.log("🔁 Wrong secret for this recipient; keep trying.");
+            this.log("🔁 Wrong secret for recipient; keep trying.");
+          }
+        }
+      }
+
+      if (!dataKey && this._password !== null) {
+        for (const r of recipients) {
+          try {
+            const wrapKey = await this.deriveKeyFromPass(this._password, r.salt);
+            const dataKeyRaw = new Uint8Array(
+              await crypto.subtle.decrypt({ name: "AES-GCM", iv: r.wrapIv }, wrapKey, r.wrappedKey)
+            );
+            dataKey = await crypto.subtle.importKey(
+              "raw",
+              dataKeyRaw,
+              { name: "AES-GCM" },
+              false,
+              ["decrypt"]
+            );
+            this.log("✅ Unwrapped data key with the password.");
+            break
+          } catch (_) {
+            this.log("🔁 Wrong secret for password; keep trying.");
           }
         }
       }
 
       if (!dataKey) {
-        throw new Error("None of the provided secrets could unwrap the data key.");
+        throw new Error("None of the provided secrets (and password) could unwrap the data key.");
       }
 
       const ptBuf = new Uint8Array(

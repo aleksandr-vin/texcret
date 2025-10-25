@@ -20,18 +20,48 @@
     padding: 1rem;
     border-radius: 8px;
   }
+
+  .pass {
+    background: #dddddd;
+    padding: 1rem;
+    border-radius: 0px;
+  }
+
+  .inputs {
+    background: #dddddd;
+    padding: 1rem;
+    border-radius: 0px;
+  }
 </style>
 <h2>Tex(t Se)cret demo</h2>
-<p>Register writes a secret into the key’s largeBlob; Authenticate reads it and decrypts.</p>
 
-<p><button id="register">Register key + store secret</button></p>
-<p><button id="authenticate">Authenticate + read secret</button></p>
-<p><button id="fake">Fake secret</button>&nbsp;<button id="shuffle">Shuffle secrets</button></p>
-<p><button id="encrypt">Encrypt sample text (with stored secret)</button></p>
-<p><button id="decrypt">Decrypt sample text</button></p>
+<p><button id="register">Register key + store secret</button> Register writes a secret into the key’s largeBlob</p>
+<p><button id="authenticate">Authenticate + read secret</button> Authenticate reads it and decrypts it</p>
+<p><button id="fake">Fake secret</button> Generates random secret for the demo</p>
+<p><button id="pass-to-secret">Load secret from password</button> Loads secret from the password</p>
+
+<div class="pass">
+  <p>
+    <label for="password">Password:</label>
+    <input name="password" id="password" type="password" value="" />
+  </p>
+  <p>
+    <label for="confirm">Confirm:</label>
+    <input name="confirm" id="confirm" type="password" value="" />
+  </p>
+
+</div>
 
 <p><span id="authState" class="muted">(secret not loaded)</span></p>
 
+<p><button id="shuffle">Shuffle secrets</button> Shuffles secrets for the demo</p>
+
+<hr />
+
+<p><button id="encrypt">Encrypt sample text</button> (with loaded secrets)</p>
+<p><button id="decrypt">Decrypt sample text</button> (trying all loaded secrets until success)</p>
+
+<p>
 <div class="inputs">
   <p>
     <label for="pt">Plaintext:</label>
@@ -46,6 +76,12 @@
     <textarea name="ct" id="ct" value="" rows="6" cols="60"></textarea>
   </p>
 </div>
+</p>
+
+<hr />
+
+<p><button id="decretex">Decretex</button> Decrypt all texcrets on the page (that have <code>.texcreted</code> class)
+</p>
 
 <p class="texcreted">
   WUtMQjIAHs04KM7YT67+/V9YAA5zb21lIGZpbGUgbmFtZQABuO3+bQ6pCwvVVa+AbZ0WwfYWYxUMQcwCcdf0rQAwIt/KO+70mUK9xgk6lxeyf+sMn1EvZvMrNV+q1dtaEGYeUiAeJGXTTr9/Dn7DvNGM5jPtKFBND5geEBReHuisP9zF8GXMESnekvoCARLMam1ArTlnH4HMXQ==
@@ -55,10 +91,11 @@
   WUtMQjIA9RnI7of/syU1zGfqAA5zb21lIGZpbGUgbmFtZQABg2mLmBBMhebKSN4/mmH/Fg6OtAS1Y8j7EIGI3gAwJohJb991Kc3yPEtIQoOdAXfuOzgeXSEeHbG0UbS3LG1rEsRXVP8iaUd3OuwcCy4bW7ImuyrmcNOOk96jwSgIQNhPVbWWVlwoBmWOhpQ9n+qH2bsy4xl+
 </p>
 
-<p><button id="decretex">Decretex</button></p>
+<hr />
 
-
+<p>
 <div id="log"></div>
+</p>
 
 <script>
 
@@ -91,6 +128,22 @@
       });
     }
 
+    async function doLoadPassword() {
+      const pass = $("#password").value;
+      const confirm = $("#confirm").value;
+      if (pass != confirm) {
+        log("❌ Password does not match confirmation!");
+        return;
+      }
+      await Texcret.loadPassword(pass, onOk = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last is password)";
+        $("#authState").className = "ok";
+      }, onError = (msg) => {
+        log(msg);
+      });
+    }
+
     async function doEncrypt() {
       const data = Texcret.enc.encode($("#pt").value);
       const out = await Texcret.encrypt(data, "some file name");
@@ -104,7 +157,7 @@
       const res = await Texcret.decrypt(data);
       if (res) {
         const pt = Texcret.dec.decode(res.buffer);
-        Texcret.log("🔓 Decrypted plaintext:", pt);
+        log("🔓 Decrypted plaintext:", pt);
         $("#pt").value = pt;
       }
     }
@@ -114,9 +167,10 @@
       const secret = Texcret.randBytes(32); // store this in largeBlob
       const secretB64 = Texcret.b64(secret); // ArrayBuffer -> b64
       Texcret._secretsB64.push(secretB64);
-      $("#authState").textContent = "" + (Texcret._secretsB64.length) + " secret(s): loaded (last fake)";
+      secretsLoaded += 1;
+      $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last fake)";
       $("#authState").className = "ok";
-      Texcret.log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
+      log("✅ Faked secret (" + (secret.byteLength) + " bytes) " + secretB64);
     }
 
     async function doDecretex() {
@@ -145,6 +199,7 @@
     $('#encrypt').onclick = doEncrypt;
     $('#register').onclick = doRegister;
     $('#authenticate').onclick = doAuthenticate;
+    $('#pass-to-secret').onclick = doLoadPassword;
     $('#fake').onclick = doFake;
     $('#shuffle').onclick = () => {
       x = Texcret._secretsB64;
