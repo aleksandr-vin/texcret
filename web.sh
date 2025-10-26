@@ -11,4 +11,4 @@ key_pem=$(echo $(hostname)*-key.pem)
 (sleep 2 && open https://$(hostname) ) &
 
 
-uvicorn app:app --host 0.0.0.0 --port 443 --ssl-keyfile ${key_pem} --ssl-certfile ${key_pem%-key.pem}.pem
+uvicorn web:app --host 0.0.0.0 --port 443 --ssl-keyfile ${key_pem} --ssl-certfile ${key_pem%-key.pem}.pem

@@ -84,7 +84,7 @@ Then on your iPhone:
 
 Then on your mac again:
 
-    ./app.sh
+    ./web.sh
 
 That will open an https-served page (see [public/index.html](public/index.html)), you can open it on your iPhone
 or continue on mac.
