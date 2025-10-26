@@ -8,6 +8,16 @@ Page reads a secret key from the Yubikey credentials (securely stored on Yubikey
 User x Relying Party x Page Origin) and decrypts the payload on the page.
 When user wants to hide page payload again, they refresh or close the page.
 
+## Quick start
+
+Add to the end of you HTML page:
+
+```html
+<script defer src="texcret.js" onload="Texcret.magic();"></script>
+```
+
+Then when page loads, perform this click pattern on any *texcret* on the page: dblclick - click - dblclick. And magic will happen!
+
 ## Running locally
 
 Create local cert:
