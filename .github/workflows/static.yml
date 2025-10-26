@@ -36,7 +36,7 @@ jobs:
       - name: Set version in JS
         run: |
           COMMIT=$(git rev-parse --short HEAD)
-          sed -i -E 's/^([[:space:]]*VERSION:[[:space:]]*")([^"]*)(")([[:space:]]*),([[:space:]]*)$/\1\2+g'"$COMMIT"'\3\4\5\6/' public/texcret.js
+    sed -i -E 's/^([[:space:]]*VERSION[[:space:]]*:[[:space:]]*")([^"]*)("[[:space:]]*,[[:space:]]*)$/\1\2+'"$COMMIT"'\3/' public/texcret.js
           grep -n 'VERSION:' public/texcret.js
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
