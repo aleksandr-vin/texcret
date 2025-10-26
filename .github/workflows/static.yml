@@ -33,6 +33,11 @@ jobs:
         uses: actions/checkout@v4
       - name: Setup Pages
         uses: actions/configure-pages@v5
+      - name: Set version in JS
+        run: |
+          COMMIT=$(git rev-parse --short HEAD)
+          sed -i -E 's/^([[:space:]]*VERSION:[[:space:]]*")([^"]*)(")([[:space:]]*),([[:space:]]*)$/\1\2+g'"$COMMIT"'\3\4\5\6/' public/texcret.js
+          grep -n 'VERSION:' public/texcret.js
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
