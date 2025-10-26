@@ -476,6 +476,14 @@ window.Texcret = {
     return matches;
   },
 
+  enableReloadOnVisChange() {
+    // Visibility changes (tab change, app background, screen lock, many cases)
+    document.addEventListener('visibilitychange', () => {
+      console.log('Page changed visibility — reloading to keep texcrets safe');
+      location.reload();
+    });
+  },
+
   /* ====== Magic: find all nodes that contain WUtMQjIA.... texcrets and add click-callback to decretex them ====== */
   async magic() {
     let self = this;
@@ -489,6 +497,7 @@ window.Texcret = {
               if (self) {
                 self = null;
                 await window.Texcret.decretex(matches.map((v) => v.node));
+                window.Texcret.enableReloadOnVisChange();
                 console.log("🪄");
                 delete window.Texcret.magic;
                 delete window.Texcret.decretex;
