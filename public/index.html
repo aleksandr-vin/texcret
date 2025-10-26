@@ -122,8 +122,36 @@
   const $ = (sel) => { return document.querySelector(sel); };
   const log = (...a) => { $('#log').textContent += a.join(' ') + "\n"; };
 
-  const userName = "xxx";
-  const userEmail = "yyy";
+  // ---- get user name and email from query string or fragments, trying different option aliases ----
+  function parseNameEmail(url = location.href) {
+    const u = new URL(url, location.origin);
+
+    const qs = new URLSearchParams(u.search);
+    const hs = new URLSearchParams(u.hash.startsWith('#') ? u.hash.slice(1) : u.hash);
+
+    const first = (...keys) => {
+      for (const k of keys) {
+        const v = qs.get(k) ?? hs.get(k);
+        if (v != null && v !== "") return v;
+      }
+      return null;
+    };
+
+    let name = first('name', 'full_name', 'user', 'username', 'u');
+    let email = first('email', 'mail', 'e', 'user_email');
+
+    const normalize = (s) => s ? s.replace(/\+/g, ' ').trim() : null;
+    name = normalize(name);
+    email = email ? email.trim() : null;
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = null;
+
+    return { name, email };
+  }
+
+  const { name, email } = parseNameEmail();
+  const userName = name || "Jay";
+  const userEmail = email || "jay@example.com";
   $("#user-name").value = userName;
   $("#user-email").value = userEmail;
 
@@ -131,7 +159,7 @@
     Texcret.log = log;
 
     Texcret.setRPName("Tex(t Se)cret");
-    Texcret.setUser("jay@example.com", "Jay");
+    Texcret.setUser(userEmail, userName);
 
     let secretsLoaded = 0;
 
