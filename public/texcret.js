@@ -7,6 +7,7 @@
 
 window.Texcret = {
   VERSION: "0.1.0",
+  MAGIC2: new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x32, 0x00]), // "YKLB2\0"
 
   log(...a) { console.log(a.join(" ")); },
   enc: new TextEncoder(),
@@ -186,7 +187,6 @@ window.Texcret = {
    *   salt (16), wrapIv (12), wrapLen (uint16), wrappedKey (wrapLen)
    * After recipients: ciphertext (AES-GCM over plaintext using dataKey & dataIv)
    */
-  MAGIC2: new Uint8Array([0x59, 0x4b, 0x4c, 0x42, 0x32, 0x00]), // "YKLB2\0"
 
   makeHeaderV2(dataIv, name, recipEntries) {
     const nameUtf8 = this.enc.encode(name);
@@ -373,8 +373,8 @@ window.Texcret = {
   },
 
   /* ====== Decrypt text content of all .texcreted elements ====== */
-  async decretex() {
-    if (this._secretsB64.length == 0) {
+  async decretex(nodes) {
+    if (this._secretsB64.length == 0 && this._password === null) {
       this.log("⏩️ No secrets loaded. Authenticating...");
       await this.authenticateAndLoadSecret();
       if (this._secretsB64.length == 0) {
@@ -382,20 +382,125 @@ window.Texcret = {
         return;
       }
     }
+
+    // Define the base64-like pattern
+    const base64Pattern = new RegExp(String.raw`${this.b64(this.MAGIC2)}[A-Za-z0-9+/=]*?(?=[^A-Za-z0-9+/=]|$)`, "g");
+
+    const self = this;
+
+    async function decryptText(text) {
+      const data = new Uint8Array(self.ubuf(text));
+      const res = await self.decrypt(data);
+      if (res) {
+        const pt = self.dec.decode(res.buffer);
+        self.log("🔓 Decrypted plaintext:", pt);
+        return pt;
+      } else {
+        self.log("❌ Not decrypted texcreted text:", text);
+        return text;
+      }
+    }
+
+    async function processTextNode(node) {
+      const text = node.nodeValue;
+      let result = '';
+      let lastIndex = 0;
+      let m;
+
+      // reset regex lastIndex
+      base64Pattern.lastIndex = 0;
+
+      while ((m = base64Pattern.exec(text)) !== null) {
+        // Append the part before match
+        result += text.slice(lastIndex, m.index);
+
+        // Generate async replacement
+        const replacement = await decryptText(m[0]);
+        result += replacement;
+
+        lastIndex = base64Pattern.lastIndex;
+      }
+
+      // Append remaining tail
+      result += text.slice(lastIndex);
+
+      // Write back
+      node.nodeValue = result;
+    }
+
     try {
-      document.querySelectorAll('.texcreted').forEach(async el => {
-        const data = new Uint8Array(this.ubuf(el.textContent));
-        const res = await this.decrypt(data);
-        if (res) {
-          const pt = this.dec.decode(res.buffer);
-          this.log("🔓 Decrypted plaintext:", pt);
-          el.textContent = pt;
-        } else {
-          this.log("❌ Not decrypted texcreted text:", el.textContent);
+      for (const node of nodes) {
+        if (base64Pattern.test(node.nodeValue)) {
+          await processTextNode(node);
         }
-      });
+      }
     } finally {
       this.cleanSecrets();
     }
   },
+
+  async findAllTexcrets() {
+    // Define the base64-like pattern
+    const base64Pattern = new RegExp(String.raw`${this.b64(this.MAGIC2)}[A-Za-z0-9+/=]*?(?=[^A-Za-z0-9+/=]|$)`, "g");
+
+    // Helper: walk through all text nodes in the document
+    function* textNodesUnder(el) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+      let node;
+      while ((node = walker.nextNode())) yield node;
+    }
+
+    function findEventTargetParent(node) {
+      let parent = node;
+      while (parent && parent.nodeType !== Node.ELEMENT_NODE && parent.nodeType !== Node.DOCUMENT_NODE) {
+        parent = parent.parentNode;
+      }
+      return parent || null;
+    }
+
+    // Collect all matches
+    const matches = [];
+
+    for (const node of textNodesUnder(document.body)) {
+      const text = node.nodeValue;
+      let m;
+      while ((m = base64Pattern.exec(text)) !== null) {
+        matches.push({
+          text: m[0],
+          node,
+          evt: findEventTargetParent(node),
+          index: m.index,
+        });
+      }
+    }
+    return matches;
+  },
+
+  /* ====== Magic: find all nodes that contain WUtMQjIA.... texcrets and add click-callback to decretex them ====== */
+  async magic() {
+    let self = this;
+    const matches = await this.findAllTexcrets();
+    const els = matches.map((v) => v.evt);
+    els.forEach(async el => {
+      el.addEventListener('dblclick', async () => {
+        if (self) {
+          el.addEventListener('click', async () => {
+            self && el.addEventListener('dblclick', async () => {
+              if (self) {
+                self = null;
+                await window.Texcret.decretex(matches.map((v) => v.node));
+                console.log("🪄");
+                delete window.Texcret.magic;
+                delete window.Texcret.decretex;
+                delete window.Texcret;
+              }
+            }, options = { once: true });
+          }, options = { once: true });
+          await new Promise(resolve => setTimeout(resolve, 3000));
+          console.log("🧹");
+          self = null;
+        }
+      }, options = { once: true });
+    });
+  }
 };

@@ -83,13 +83,22 @@
 <p><button id="decretex">Decretex</button> Decrypt all texcrets on the page (that have <code>.texcreted</code> class)
 </p>
 
-<p class="texcreted">
-  WUtMQjIAHs04KM7YT67+/V9YAA5zb21lIGZpbGUgbmFtZQABuO3+bQ6pCwvVVa+AbZ0WwfYWYxUMQcwCcdf0rQAwIt/KO+70mUK9xgk6lxeyf+sMn1EvZvMrNV+q1dtaEGYeUiAeJGXTTr9/Dn7DvNGM5jPtKFBND5geEBReHuisP9zF8GXMESnekvoCARLMam1ArTlnH4HMXQ==
-</p>
-
-<p class="texcreted">
-  WUtMQjIA9RnI7of/syU1zGfqAA5zb21lIGZpbGUgbmFtZQABg2mLmBBMhebKSN4/mmH/Fg6OtAS1Y8j7EIGI3gAwJohJb991Kc3yPEtIQoOdAXfuOzgeXSEeHbG0UbS3LG1rEsRXVP8iaUd3OuwcCy4bW7ImuyrmcNOOk96jwSgIQNhPVbWWVlwoBmWOhpQ9n+qH2bsy4xl+
-</p>
+<div class="examples">
+  Look, Ma:
+  <p>
+    This is encrypted with passkey on
+    mac:<i>WUtMQjIAHs04KM7YT67+/V9YAA5zb21lIGZpbGUgbmFtZQABuO3+bQ6pCwvVVa+AbZ0WwfYWYxUMQcwCcdf0rQAwIt/KO+70mUK9xgk6lxeyf+sMn1EvZvMrNV+q1dtaEGYeUiAeJGXTTr9/Dn7DvNGM5jPtKFBND5geEBReHuisP9zF8GXMESnekvoCARLMam1ArTlnH4HMXQ==!!!!!</i>
+  </p>
+  <p>
+    This on
+    iPhone:WUtMQjIA9RnI7of/syU1zGfqAA5zb21lIGZpbGUgbmFtZQABg2mLmBBMhebKSN4/mmH/Fg6OtAS1Y8j7EIGI3gAwJohJb991Kc3yPEtIQoOdAXfuOzgeXSEeHbG0UbS3LG1rEsRXVP8iaUd3OuwcCy4bW7ImuyrmcNOOk96jwSgIQNhPVbWWVlwoBmWOhpQ9n+qH2bsy4xl+:))
+  </p>
+  <p>
+    And this with password
+    (<code>dark secrets</code>) and passkey on
+    mac:<code>WUtMQjIAMK4lyaHMMPDRjo66AA5zb21lIGZpbGUgbmFtZQACxSWv1bbth5mpqlzM7tUT226IQVIawLbOAnu8NAAwe2r+WmS7VNWEdYAlLiFZLFw50LaUHN/NJ4WZkGN2e4tMoufa0ZDqR45BHAgBTVYmOutIDxU1a7rBq99plIzenxEFVMVIh8qSnFRO7QAwvsQmEOHvzfV7K3dywrg9dp6ZD++Y5k+xT3cBj0Q+mDy9lBH2VdM8sCeXNsa5n8jlaeUza5Z9HMH1eyCL3z2m9q0HHPS1VlYi+E+C/kYRmdxuMVc=</code>
+  </p>
+</div>
 
 <hr />
 
@@ -103,8 +112,6 @@
   const log = (...a) => { $('#log').textContent += a.join(' ') + "\n"; };
 
   async function init() {
-
-
     Texcret.log = log;
 
     Texcret.setRPName("Tex(t Se)cret Demo");
@@ -208,9 +215,12 @@
       console.log(Texcret._secretsB64);
     };
     $('#decretex').onclick = doDecretex;
+
+    await Texcret.magic();
   }
 </script>
 
 <script defer src="texcret.js" onload="init();"></script>
+<!-- <script defer src="texcret.js" onload="Texcret.magic();"></script> -->
 
 </html>
