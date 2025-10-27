@@ -1,0 +1,70 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Tex(t Se)cret Passkey Bridge</title>
+<style>
+  html,
+  body {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    /* vertical centering */
+    justify-content: center;
+    /* horizontal centering */
+    font: 24px/1.4 system-ui, sans-serif;
+  }
+</style>
+<script>
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+  function b64(ab) { return btoa(String.fromCharCode(...new Uint8Array(ab))); }
+  const q = new URLSearchParams(location.search);
+  const token = q.get('token'); // paste from CLI
+  const localhost = q.get('lh') || 'https://localhost:8443';
+
+  async function run() {
+    await new Promise(resolve => setTimeout(resolve, 2000));
+
+    try {
+      // Authenticate and read largeBlob
+      const assertion = await navigator.credentials.get({
+        publicKey: {
+          challenge: crypto.getRandomValues(new Uint8Array(32)),
+          userVerification: "preferred",
+          timeout: 60000,
+          extensions: { largeBlob: { read: true } },
+        }
+      });
+      const ext = assertion.getClientExtensionResults();
+      if (!ext || !ext.largeBlob || !ext.largeBlob.blob) throw new Error("No largeBlob");
+
+      // Send to the CLI on localhost
+      const secret = ext.largeBlob.blob;
+      console.log(b64(secret));
+      console.log(JSON.stringify({ secretB64: b64(secret) }));
+      // await new Promise(resolve => setTimeout(resolve, 1000));
+      const res = await fetch(`${localhost}/platform/secret?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ secretB64: b64(secret) }),
+        // CORS will succeed only if CLI replies with Access-Control-Allow-Origin: https://example.com
+        mode: 'cors',
+        credentials: 'omit'
+      });
+      console.log(res);
+      if (!res.ok) throw new Error("CLI refused secret");
+      document.body.textContent = "✅ Secret delivered to CLI. You can close this tab.";
+    } catch (e) {
+      document.body.textContent = "❌ " + e.message;
+      console.error(e);
+    }
+  }
+  run();
+</script>
+
+<body>
+  Tex(t Se)crets Bridge is about to authenticate you…
+</body>
