@@ -112,7 +112,7 @@ Then all these secrets are self-encrypted and sent to CLI locally via https://lo
 
 The command to load the secrets is this:
 
-    texcret load-secrets
+    texcret load-secrets --origin https://aleksandr.vin --bridge-base-path /texcret
 
 Check help for options. You'll need cert and key for the local server, see *Running locally* section above in this documentation.
 
@@ -124,13 +124,13 @@ You can also force excluding that password from use in encryption/decryption wit
 
 Once you loaded secrets, you can list them with:
 
-    texcret list-secrets
+    texcret list-secrets --origin https://aleksandr.vin
 
 ### Encrypt files locally
 
 Encryption is done with:
 
-    texcret encrypt --password - file.tar.gz
+    texcret encrypt --origin https://aleksandr.vin --password - file.tar.gz
 
 Which will create a *file.tar.gz.enc*.
 
@@ -138,7 +138,7 @@ Which will create a *file.tar.gz.enc*.
 
 Decryption is done with:
 
-    texcret decrypt --password - file.tar.gz.enc
+    texcret decrypt --origin https://aleksandr.vin --password - file.tar.gz.enc
 
 ### Create *texcrets* in files
 
@@ -152,7 +152,7 @@ This text must be secured
 
 Then you run:
 
-    texcret texcret --password - --in-file docs.md
+    texcret texcret --origin https://aleksandr.vin --password - --in-file docs.md
 
 It will replace markup blocks with *texcret* blocks, see next section on how to *detexcret* them back.
 
@@ -179,6 +179,6 @@ u1ltNpoJKAHEekHqBLOjk/f/ZOiegu5NBiHH7eLjGA==
 
 Can be *detexcreted* with reverse call:
 
-    texcret detexcret --password - --in-file docs.md
+    texcret detexcret --origin https://aleksandr.vin --password - --in-file docs.md
 
 That should render the original file.
