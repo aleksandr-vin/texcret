@@ -23,24 +23,11 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
-# FIDO2 (roaming) -------------------------------------------------------------
-from fido2.hid import CtapHidDevice
-from fido2.client import Fido2Client, UserInteraction
-from fido2.webauthn import (
-    PublicKeyCredentialRpEntity,
-    PublicKeyCredentialUserEntity,
-    AttestationConveyancePreference,
-    PublicKeyCredentialParameters,
-    PublicKeyCredentialType,
-    PublicKeyCredentialDescriptor,
-    AuthenticatorSelectionCriteria,
-)
-
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
-STATE_DIR = Path(os.path.expanduser("~/.yk_largeblob"))
+STATE_DIR = Path(os.path.expanduser("~/.config/texcrets"))
 STATE_DIR.mkdir(parents=True, exist_ok=True)
-STATE_FILE = STATE_DIR / "cred.json"
+STATE_FILE = STATE_DIR / "secrets.json"
 
 # ===== Formats & constants =====
 MAGIC2 = b"YKLB2\x00"  # 6 bytes
@@ -49,15 +36,6 @@ WRAP_IV_LEN = 12  # AES-GCM IV for wrapping
 SALT_LEN = 16  # salt for HKDF/PBKDF2
 PASSKEY_INFO = b"YK-largeBlob-text"
 SECRET_LEN = 32
-
-# ===== State schema =====
-# {
-#   "creds": [
-#       {"kind":"roaming","rp_id":"...","origin":"...","cred_id_hex":"..."},
-#       {"kind":"platform","rp_id":"...","origin":"https://localhost:8443","cred_id_b64":"..."}
-#   ]
-# }
-# (No secrets and no passwords are stored.)
 
 
 # ---------- Utilities ----------
@@ -73,98 +51,9 @@ def load_state() -> dict:
 
 def ensure_state():
     st = load_state()
-    if "creds" not in st:
-        st["creds"] = []
+    if "secrets" not in st:
+        st["secrets"] = []
     return st
-
-
-# ---------- Roaming (HID) helpers ----------
-def pick_device() -> "CtapHidDevice":
-    devs = list(CtapHidDevice.list_devices())
-    if not devs:
-        typer.secho("No FIDO2 (roaming) device found. Insert your YubiKey.", fg="red")
-        raise typer.Exit(1)
-    if len(devs) > 1:
-        typer.secho(
-            f"Multiple roaming authenticators found; using the first: {devs[0]}",
-            fg="yellow",
-        )
-    return devs[0]
-
-
-class QuietUI(UserInteraction):
-    def prompt_up(self) -> bool:
-        return True
-
-
-def build_client(rp_id: str, origin: str) -> Fido2Client:
-    dev = pick_device()
-    return Fido2Client(dev, origin=origin, user_interaction=QuietUI())
-
-
-def make_roaming_credential_and_write_blob(
-    rp_id: str, origin: str
-) -> t.Tuple[bytes, bytes]:
-    client = build_client(rp_id, origin)
-    rp = PublicKeyCredentialRpEntity(id=rp_id, name="YK multi-secret CLI")
-    user = PublicKeyCredentialUserEntity(
-        id=os.urandom(16), name="multi@example.com", display_name="Multi User"
-    )
-    params = [
-        PublicKeyCredentialParameters(PublicKeyCredentialType.PUBLIC_KEY, -7)
-    ]  # ES256
-    secret = os.urandom(SECRET_LEN)
-
-    options, state = client.make_credential_options(
-        rp=rp,
-        user=user,
-        challenge=os.urandom(32),
-        authenticator_selection=AuthenticatorSelectionCriteria(
-            resident_key="preferred",
-            user_verification="preferred",
-            require_resident_key=None,
-        ),
-        attestation=AttestationConveyancePreference.NONE,
-        extensions={"largeBlob": {"support": "required"}},
-        timeout=60000,
-    )
-    att_obj, _client_data = client.make_credential(options, state)
-    cred_data = att_obj.auth_data.credential_data
-    if not cred_data:
-        raise RuntimeError("No credential data returned.")
-    cred_id = cred_data.credential_id
-
-    # Write the secret immediately
-    allow = [PublicKeyCredentialDescriptor(type="public-key", id=cred_id)]
-    options, state = client.get_assertion_options(
-        rp_id=rp_id,
-        challenge=os.urandom(32),
-        allow_credentials=allow,
-        user_verification="preferred",
-        extensions={"largeBlob": {"write": secret}},
-        timeout=60000,
-    )
-    _assertions, _cd = client.get_assertion(options, state)
-    return cred_id, secret
-
-
-def read_roaming_largeblob_secret(rp_id: str, origin: str, cred_id: bytes) -> bytes:
-    client = build_client(rp_id, origin)
-    allow = [PublicKeyCredentialDescriptor(type="public-key", id=cred_id)]
-    options, state = client.get_assertion_options(
-        rp_id=rp_id,
-        challenge=os.urandom(32),
-        allow_credentials=allow,
-        user_verification="preferred",
-        extensions={"largeBlob": {"read": True}},
-        timeout=60000,
-    )
-    assertions, _cd = client.get_assertion(options, state)
-    ext = assertions[0].client_extension_results
-    blob = ext.get("largeBlob", {}).get("blob")
-    if not blob or len(blob) < SECRET_LEN:
-        raise RuntimeError("largeBlob read missing/short.")
-    return bytes(blob[:SECRET_LEN])
 
 
 # ---------- Derivation (wrap keys) ----------
@@ -239,21 +128,8 @@ def parse_header_v2(blob: bytes) -> ParsedHeaderV2:
 
 
 # ---------- State helpers ----------
-def list_state_creds() -> t.List[dict]:
-    return ensure_state()["creds"]
-
-
-def add_state_roaming(rp_id: str, origin: str, cred_id_hex: str):
-    st = ensure_state()
-    st["creds"].append(
-        {
-            "kind": "roaming",
-            "rp_id": rp_id,
-            "origin": origin,
-            "cred_id_hex": cred_id_hex,
-        }
-    )
-    save_state(st)
+def list_state_secrets() -> str:
+    return ensure_state()["secrets"]
 
 
 def add_state_platform(rp_id: str, origin: str, cred_id_b64: str):
@@ -267,13 +143,6 @@ def add_state_platform(rp_id: str, origin: str, cred_id_b64: str):
         }
     )
     save_state(st)
-
-
-def get_cred_by_index(idx: int) -> dict:
-    creds = list_state_creds()
-    if idx < 0 or idx >= len(creds):
-        raise typer.BadParameter(f"Index out of range (0..{len(creds) - 1}).")
-    return creds[idx]
 
 
 class PlatformHandler(SimpleHTTPRequestHandler):
@@ -314,8 +183,8 @@ class PlatformHandler(SimpleHTTPRequestHandler):
             data = json.loads(body.decode("utf-8"))
         except Exception:
             data = {}
-        if parsed.path == "/platform/secret":
-            self.secret_box["secretB64"] = data.get("secretB64", "")
+        if parsed.path == "/secrets":
+            self.secret_box["storage"] = data.get("storage", [])
             self.send_response(200)
             self.send_header("Access-Control-Allow-Origin", self.origin)
             self.end_headers()
@@ -368,8 +237,7 @@ def platform_read_secret(
     timeout: timedelta,
 ) -> bytes:
     """
-    Opens a page that authenticates the platform passkey and reads the first 32B of largeBlob.
-    If cred_id_b64 is None, the browser lets the user choose.
+    Opens a bridge page on the https://{origin}/bridge.html where user can load all required secrets and send them back to cli.
     """
 
     def run(base, token, lh, box):
@@ -381,55 +249,95 @@ def platform_read_secret(
             range(int(timeout.total_seconds() * 10)),
             description="Waiting for passkey bridge to reply",
         ):
-            if box.get("secretB64"):
-                return {"secretB64": box["secretB64"]}
+            if box.get("storage"):
+                return {"storage": box["storage"]}
             threading.Event().wait(0.1)
         raise RuntimeError("Timed out waiting for platform registration.")
 
     res = with_https_server(cert, key, origin, port, run)
-    return res["secretB64"]
+    return res["storage"]
 
 
-# ---------- Commands ----------
-@app.command("add-cred")
-def add_cred(
-    rp_id: str = typer.Option("localhost", help="RP ID (domain)"),
-    origin: str = typer.Option(
-        "https://localhost", help="Origin for roaming (must be https://<rp_id>)"
-    ),
-):
-    """Register a *roaming* credential (YubiKey) and write a 32B secret; store metadata."""
-    print("[bold]Registering new roaming credential…[/bold]")
-    cred_id, _secret = make_roaming_credential_and_write_blob(rp_id, origin)
-    add_state_roaming(rp_id, origin, cred_id.hex())
-    print(
-        f"[green]✅ Added roaming credential[/green] id={cred_id.hex()} for rp_id={rp_id}"
-    )
+def decrypt_with_passwords(blob: bytes, pwds: list[str]) -> bytes:
+    """Decrypt with passwords"""
 
+    hdr = parse_header_v2(blob)
+    ct = blob[hdr.body_off :]
 
-@app.command("list-creds")
-def list_creds():
-    """List stored credentials (roaming + platform)."""
-    creds = list_state_creds()
-    if not creds:
-        print(
-            "[yellow]No credentials stored. Use `add-cred` or `add-platform-cred`.[/yellow]"
+    data_key_raw: t.Optional[bytes] = None
+
+    for pwd in pwds:
+        for r in hdr.recipients:
+            try:
+                data_key_raw = derive_wrapkey_from_password(pwd, r.salt).decrypt(
+                    r.wrap_iv, r.wrapped_key, None
+                )
+                raise StopIteration
+            except Exception:
+                pass
+
+    if data_key_raw is None:
+        typer.secho(
+            f"Failed to unwrap key for {hdr.name} (no matching secret).", fg="red"
         )
         return
-    tbl = Table(title="Stored credentials")
-    tbl.add_column("#", justify="right")
-    tbl.add_column("kind")
-    tbl.add_column("rp_id")
-    tbl.add_column("origin")
-    tbl.add_column("id (short)")
-    for i, c in enumerate(creds):
-        short = (c.get("cred_id_hex", "") or c.get("cred_id_b64", ""))[:16] + "…"
-        tbl.add_row(str(i), c["kind"], c["rp_id"], c["origin"], short)
-    print(tbl)
+
+    try:
+        pt = AESGCM(data_key_raw).decrypt(hdr.data_iv, ct, None)
+    except Exception as e:
+        typer.secho(f"Data decrypt failed for {hdr.name}: {e}", fg="red")
+        return
+
+    print(f"[green]✓[/green] {hdr.name}")
+    return pt
 
 
-@app.command("platform-secret")
-def get_platform_secret(
+@app.command("list-secrets")
+def list_secrets(
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    show_secrets: bool = typer.Option(False, help="Show secrets"),
+):
+    """List stored secrets."""
+    secrets = list_state_secrets()
+    if not secrets:
+        print(
+            "[yellow]No secrets stored. Use `add-cred` or `add-platform-cred`.[/yellow]"
+        )
+        return
+
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    blob = base64.decodebytes(secrets.encode(encoding="utf-8"))
+    data = decrypt_with_passwords(blob, pwds)
+    if data is None:
+        typer.secho("No secrets opened", fg="red")
+        return
+    open_storage = json.loads(data)
+    storage_secretsB64 = open_storage["secretsB64"]
+    storage_passwords = open_storage["passwords"]
+    print(f"{len(storage_secretsB64)} secrets decrypted")
+    print(f"{len(storage_passwords)} passwords decrypted")
+
+    for i, secret in enumerate(storage_secretsB64, start=1):
+        if show_secrets:
+            xx = base64.decodebytes(secret.encode(encoding="utf-8"))
+            hex = xx.hex()
+            print(str(i), "-", secret, hex)
+        else:
+            s = secret[:5] + "..." + secret[-5:]
+            print(str(i), "-", s)
+    for i, storage_password in enumerate(storage_passwords, start=1):
+        if show_secrets:
+            s = storage_password
+        else:
+            s = storage_password[:5] + "..." + storage_password[-5:]
+        print(str(i), "-", s)
+
+
+@app.command("load-secrets")
+def load_secrets(
     cert: t.Optional[Path] = typer.Option(
         None, exists=True, help="(Platform only) TLS cert"
     ),
@@ -447,38 +355,11 @@ def get_platform_secret(
     """"""
     timeout = timedelta(minutes=timeout)
     sec = platform_read_secret(cert, key, origin, port, timeout=timeout)
-    print(f"[green]✅ largeBlob read {len(sec)} bytes.[/green]")
-    # print(sec.hex())
+    print(f"[green]✅ secrets loaded ({len(sec)} bytes).[/green]")
     print(sec)
-
-
-@app.command("auth-test")
-def auth_test(
-    cred: int = typer.Option(..., help="Index from list-creds"),
-    cert: t.Optional[Path] = typer.Option(
-        None, exists=True, help="(Platform only) TLS cert"
-    ),
-    key: t.Optional[Path] = typer.Option(
-        None, exists=True, help="(Platform only) TLS key"
-    ),
-    port: int = typer.Option(8443, help="(Platform only) HTTPS port"),
-    show_hex: bool = typer.Option(False, help="Print 32B secret as hex"),
-):
-    """Authenticate and read 32B largeBlob secret to verify the credential."""
-    c = get_cred_by_index(cred)
-    if c["kind"] == "roaming":
-        sec = read_roaming_largeblob_secret(
-            c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-        )
-    else:
-        if not cert or not key:
-            raise typer.BadParameter("Platform auth needs --cert and --key.")
-        sec = platform_read_secret(
-            cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-        )
-    print(f"[green]✅ largeBlob read {len(sec)} bytes.[/green]")
-    if show_hex:
-        print(sec.hex())
+    st = ensure_state()
+    st["secrets"] = sec
+    save_state(st)
 
 
 # Helper to fetch secrets for selected creds (roaming + platform)

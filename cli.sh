@@ -8,5 +8,5 @@ set -e
 
 key_pem=${KEY_PEM-$(echo $(hostname)*-key.pem)}
 
-python texcrets_cli.py platform-secret \
+python texcrets_cli.py load-secrets \
   --origin https://mac.home --cert ${key_pem%-key.pem}.pem --key ${key_pem}

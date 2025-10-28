@@ -1,70 +1,215 @@
 <!doctype html>
-<meta charset="utf-8">
-<title>Tex(t Se)cret Passkey Bridge</title>
+<html lang="en">
+<meta charset="utf-8" />
+<title>Tex(t Se)cret - CLI Bridge</title>
 <style>
-  html,
   body {
-    height: 100%;
-    margin: 0;
-  }
-
-  body {
-    display: flex;
     align-items: center;
     /* vertical centering */
     justify-content: center;
     /* horizontal centering */
-    font: 24px/1.4 system-ui, sans-serif;
+
+    font: 24px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+
+    max-width: 95%;
+    margin: 3rem auto;
+  }
+
+  /* Make all elements inherit font (form elements don’t by default) */
+  *,
+  input,
+  button,
+  textarea,
+  select {
+    font: inherit;
+  }
+
+  button {
+    padding: .6rem 1rem;
+    margin-right: .5rem;
+  }
+
+  #log {
+    white-space: pre-wrap;
+    background: #f6f6f8;
+    padding: 1rem;
+    border-radius: 8px;
+  }
+
+  .pass {
+    background: #dddddd;
+    padding: 1rem;
+    border-radius: 0px;
+  }
+
+  .user-data {
+    background: #dddddd;
+    padding: 1rem;
+    border-radius: 0px;
   }
 </style>
+<h2>Tex(t Se)cret demo</h2>
+
+<div class="user-data">
+  <p>
+    <label for="password">User name:</label>
+    <input name="user-name" id="user-name" value="Jay" />
+  </p>
+  <p>
+    <label for="user-email">User email:</label>
+    <input name="user-email" id="user-email" value="jay@example.com" />
+  </p>
+</div>
+
+<p><button id="register">Register key + store secret</button> Register writes a secret into the key’s largeBlob</p>
+<p><button id="authenticate">Authenticate + read secret</button> Authenticate reads it and decrypts it</p>
+
+<hr />
+
+<p><button id="pass-to-secret">Load secret from password</button> Loads secret from the password</p>
+
+<div class="pass">
+  <p>
+    <label for="password">Password:</label>
+    <input name="password" id="password" type="password" value="" />
+  </p>
+  <p>
+    <label for="confirm">Confirm:</label>
+    <input name="confirm" id="confirm" type="password" value="" />
+  </p>
+</div>
+
+<p></p>
+
+<hr />
+
+<p><span id="authState" class="muted">(secret not loaded)</span></p>
+
+<p><button id="send-to-cli">Send secrets to CLI</button> Send all loaded secrets to CLI</p>
+
+<hr />
+
+<p>
+<div id="log"></div>
+</p>
+
 <script>
-  const enc = new TextEncoder();
-  const dec = new TextDecoder();
-  function b64(ab) { return btoa(String.fromCharCode(...new Uint8Array(ab))); }
-  const q = new URLSearchParams(location.search);
-  const token = q.get('token'); // paste from CLI
-  const localhost = q.get('lh') || 'https://localhost:8443';
+  const $ = (sel) => { return document.querySelector(sel); };
+  const log = (...a) => { $('#log').textContent += a.join(' ') + "\n"; };
 
-  async function run() {
-    await new Promise(resolve => setTimeout(resolve, 2000));
+  // ---- get user name and email from query string or fragments, trying different option aliases ----
+  function parseNameEmail(url = location.href) {
+    const u = new URL(url, location.origin);
 
-    try {
-      // Authenticate and read largeBlob
-      const assertion = await navigator.credentials.get({
-        publicKey: {
-          challenge: crypto.getRandomValues(new Uint8Array(32)),
-          userVerification: "preferred",
-          timeout: 60000,
-          extensions: { largeBlob: { read: true } },
-        }
-      });
-      const ext = assertion.getClientExtensionResults();
-      if (!ext || !ext.largeBlob || !ext.largeBlob.blob) throw new Error("No largeBlob");
+    const qs = new URLSearchParams(u.search);
+    const hs = new URLSearchParams(u.hash.startsWith('#') ? u.hash.slice(1) : u.hash);
 
-      // Send to the CLI on localhost
-      const secret = ext.largeBlob.blob;
-      console.log(b64(secret));
-      console.log(JSON.stringify({ secretB64: b64(secret) }));
-      // await new Promise(resolve => setTimeout(resolve, 1000));
-      const res = await fetch(`${localhost}/platform/secret?token=${encodeURIComponent(token)}`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ secretB64: b64(secret) }),
-        // CORS will succeed only if CLI replies with Access-Control-Allow-Origin: https://example.com
-        mode: 'cors',
-        credentials: 'omit'
-      });
-      console.log(res);
-      if (!res.ok) throw new Error("CLI refused secret");
-      document.body.textContent = "✅ Secret delivered to CLI. You can close this tab.";
-    } catch (e) {
-      document.body.textContent = "❌ " + e.message;
-      console.error(e);
-    }
+    const first = (...keys) => {
+      for (const k of keys) {
+        const v = qs.get(k) ?? hs.get(k);
+        if (v != null && v !== "") return v;
+      }
+      return null;
+    };
+
+    let name = first('name', 'full_name', 'user', 'username', 'u');
+    let email = first('email', 'mail', 'e', 'user_email');
+
+    const normalize = (s) => s ? s.replace(/\+/g, ' ').trim() : null;
+    name = normalize(name);
+    email = email ? email.trim() : null;
+
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) email = null;
+
+    return { name, email };
   }
-  run();
+
+  const { name, email } = parseNameEmail();
+  const userName = name || "Jay";
+  const userEmail = email || "jay@example.com";
+  $("#user-name").value = userName;
+  $("#user-email").value = userEmail;
+
+  const q = new URLSearchParams(location.search);
+  const token = q.get('token'); // from CLI
+  const localhost = q.get('lh') || 'https://localhost:8443'; // from CLI
+
+  async function init() {
+    Texcret.log = log;
+
+    Texcret.setRPName("Tex(t Se)cret");
+
+    let secretsLoaded = 0;
+
+    async function doRegister() {
+      const userEmail = $("#user-email").value;
+      const userName = $("#user-name").value;
+      Texcret.setUser(userEmail, userName);
+      await Texcret.registerNewCredentialAndLoadSecret(onSecretLoaded = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last from registration)";
+        $("#authState").className = "ok";
+      });
+    }
+
+    async function doAuthenticate() {
+      const userEmail = $("#user-email").value;
+      const userName = $("#user-name").value;
+      Texcret.setUser(userEmail, userName);
+      await Texcret.authenticateAndLoadSecret(onSecretLoaded = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last from authentication)";
+        $("#authState").className = "ok";
+      });
+    }
+
+    async function doLoadPassword() {
+      const pass = $("#password").value;
+      const confirm = $("#confirm").value;
+      if (pass != confirm) {
+        log("❌ Password does not match confirmation!");
+        return;
+      }
+      await Texcret.loadPassword(pass, onOk = () => {
+        secretsLoaded += 1;
+        $("#authState").textContent = "" + (secretsLoaded) + " secret(s): loaded (last is password)";
+        $("#authState").className = "ok";
+      }, onError = (msg) => {
+        log(msg);
+      });
+    }
+
+    async function doSendToCLI() {
+      try {
+        const data = Texcret.enc.encode(JSON.stringify({ secretsB64: Texcret._secretsB64, passwords: Texcret._passwords }));
+        const out = await Texcret.encrypt(data, "secretsB64");
+        if (!out) {
+          log("❌ Nothing to send");
+          return;
+        }
+        const res = await fetch(`${localhost}/secrets?token=${encodeURIComponent(token)}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ storage: Texcret.b64(out.buffer) }),
+          // CORS will succeed only if CLI replies with Access-Control-Allow-Origin: https://example.com
+          mode: 'cors',
+          credentials: 'omit'
+        });
+        if (!res.ok) throw new Error("CLI refused secrets");
+        log("✅ Secrets delivered to CLI. You can close this tab.");
+      } catch (e) {
+        log("❌ " + e.message);
+        console.error(e);
+      }
+    }
+
+    $('#register').onclick = doRegister;
+    $('#authenticate').onclick = doAuthenticate;
+    $('#pass-to-secret').onclick = doLoadPassword;
+    $('#send-to-cli').onclick = doSendToCLI;
+  }
 </script>
 
-<body>
-  Tex(t Se)crets Bridge is about to authenticate you…
-</body>
+<script defer src="texcret.js" onload="init();"></script>
+
+</html>
