@@ -99,8 +99,13 @@ you can add `demo.html` to the url that was opened when `./web.sh` was started.
 
 ## CLI
 
-There is a handy cli tool, that can do many ways of encryption-decryption. It will need
-secrets to operate, so let's start with this.
+There is a handy cli tool, that can do many ways of encryption-decryption.
+
+Installing is simple with uv:
+
+    uvx --from git+https://github.com/aleksandr-vin/texcret.git@stable texcret
+
+It will need secrets to operate, so let's start with this.
 
 ### Load secrets
 
