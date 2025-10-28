@@ -199,6 +199,7 @@ def with_https_server(
     key_path: Path,
     origin: str,
     port: int,
+    bridge_base_url: str,
     fn: t.Callable[[str], t.Dict[str, str]],
 ):
     """
@@ -221,8 +222,7 @@ def with_https_server(
 
     try:
         lh = f"https://localhost:{port}"
-        base = origin
-        result = fn(base, token, lh, PlatformHandler.secret_box)
+        result = fn(bridge_base_url, token, lh, PlatformHandler.secret_box)
         return result
     finally:
         httpd.shutdown()
@@ -235,9 +235,10 @@ def platform_read_secret(
     origin: str,
     port: int,
     timeout: timedelta,
+    bridge_base_url: str,
 ) -> bytes:
     """
-    Opens a bridge page on the https://{origin}/bridge.html where user can load all required secrets and send them back to cli.
+    Opens a bridge page on the {bridge_base_url}/bridge.html where user can load all required secrets and send them back to cli.
     """
 
     def run(base, token, lh, box):
@@ -254,7 +255,7 @@ def platform_read_secret(
             threading.Event().wait(0.1)
         raise RuntimeError("Timed out waiting for platform registration.")
 
-    res = with_https_server(cert, key, origin, port, run)
+    res = with_https_server(cert, key, origin, port, bridge_base_url, run)
     return res["storage"]
 
 
@@ -301,44 +302,13 @@ def open_storage(pwds):
     data = decrypt_with_passwords(blob, pwds)
     if data is None:
         typer.secho("No secrets opened", fg="red")
-        return
+        return {}
     open_storage = json.loads(data)
     storage_secretsB64 = open_storage["secretsB64"]
     storage_passwords = open_storage["passwords"]
     print(f"{len(storage_secretsB64)} secrets decrypted")
     print(f"{len(storage_passwords)} passwords decrypted")
     return open_storage
-
-
-@app.command("list-secrets")
-def list_secrets(
-    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
-    show_secrets: bool = typer.Option(False, help="Show secrets"),
-):
-    """List stored secrets."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(pwds)
-    if storage is None:
-        return
-    storage_secretsB64 = storage["secretsB64"]
-    storage_passwords = storage["passwords"]
-    for i, secret in enumerate(storage_secretsB64, start=1):
-        if show_secrets:
-            xx = base64.decodebytes(secret.encode(encoding="utf-8"))
-            hex = xx.hex()
-            print(str(i), "-", secret, hex)
-        else:
-            s = secret[:5] + "..." + secret[-5:]
-            print(str(i), "-", s)
-    for i, storage_password in enumerate(storage_passwords, start=1):
-        if show_secrets:
-            s = storage_password
-        else:
-            s = storage_password[:3] + "..." + storage_password[-2:]
-        print(str(i), "-", s)
 
 
 @app.command("load-secrets")
@@ -353,18 +323,78 @@ def load_secrets(
     origin: str = typer.Option(
         "https://localhost", help="Origin for roaming (must be https://<rp_id>)"
     ),
+    bridge_base_path: str = typer.Option("", help="Bridge base path"),
     timeout: float = typer.Option(
         3.0, help="Timeout (in minutes) for passkey bridge to respond back"
     ),
 ):
-    """"""
+    """Load secrets through the bridge interface."""
+    bridge_base_url = origin + bridge_base_path
     timeout = timedelta(minutes=timeout)
-    sec = platform_read_secret(cert, key, origin, port, timeout=timeout)
+    sec = platform_read_secret(
+        cert, key, origin, port, timeout=timeout, bridge_base_url=bridge_base_url
+    )
     print(f"[green]✅ secrets loaded ({len(sec)} bytes).[/green]")
     print(sec)
     st = ensure_state()
     st["secrets"] = sec
     save_state(st)
+
+
+@app.command("list-secrets")
+def list_secrets(
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    show_secrets: bool = typer.Option(False, help="Show secrets"),
+):
+    """List stored secrets."""
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    if storage == {}:
+        return
+    storage_secretsB64 = storage["secretsB64"]
+    storage_passwords = storage["passwords"]
+    for i, secret in enumerate(storage_secretsB64, start=1):
+        if show_secrets:
+            sec = base64.decodebytes(secret.encode(encoding="utf-8"))
+            print(str(i), "-", secret, sec.hex())
+        else:
+            s = secret[:5] + "..." + secret[-5:]
+            print(str(i), "-", s)
+    for i, storage_password in enumerate(storage_passwords, start=1):
+        if show_secrets:
+            s = storage_password
+        else:
+            s = storage_password[:3] + "..." + storage_password[-2:]
+        print(str(i), "-", s)
+
+
+def prep_secrets(
+    password: list[str] | None, use_arg_passwords: bool, force_secrets: bool
+):
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    if storage == {} and force_secrets:
+        typer.secho("Can't proceed without secrets.", fg="red")
+        raise typer.Abort(11)
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8"))
+        for s in storage.get("secretsB64", [])
+    ]
+    storage_secrets = list(set(storage_secrets))
+    used_passwords = storage.get("passwords", [])
+
+    if use_arg_passwords:
+        used_passwords = list(set(used_passwords + pwds))
+    else:
+        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+
+    return (storage_secrets, used_passwords)
 
 
 @app.command("encrypt")
@@ -373,26 +403,12 @@ def encrypt(
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
 ):
     """Encrypt files."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(pwds)
-    if storage is None:
-        typer.secho("Can't proceed without secrets.", fg="red")
-        return
-    storage_secrets = [
-        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
-    ]
-    storage_secrets = list(set(storage_secrets))
-    used_passwords = storage["passwords"]
-
-    if arg_passwords:
-        used_passwords = list(set(used_passwords + pwds))
-    else:
-        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+    (storage_secrets, used_passwords) = prep_secrets(
+        password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+    )
 
     for p in track(paths, description="Encrypting"):
         pt = p.read_bytes()
@@ -421,7 +437,7 @@ def encrypt(
 
         header = make_header_v2(data_iv, p.name, recipients)
         (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
-        dst = (out_dir or p.parent) / (p.name + ".texcret")
+        dst = (out_dir or p.parent) / (p.name + ".enc")
         dst.write_bytes(header + ct)
         print(f"[green]✓[/green] {p} -> {dst}  (recipients={len(recipients)})")
 
@@ -432,27 +448,12 @@ def decrypt(
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Try password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
 ):
     """Decrypt files."""
-
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(pwds)
-    if storage is None:
-        typer.secho("Can't proceed without secrets.", fg="red")
-        return
-    storage_secrets = [
-        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
-    ]
-    storage_secrets = list(set(storage_secrets))
-    used_passwords = storage["passwords"]
-
-    if arg_passwords:
-        used_passwords = list(set(used_passwords + pwds))
-    else:
-        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+    (storage_secrets, used_passwords) = prep_secrets(
+        password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+    )
 
     for encp in track(paths, description="Decrypting"):
         blob = encp.read_bytes()
@@ -647,27 +648,13 @@ def texcret(
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
     in_file: bool = typer.Option(False, help="Replace the file content"),
 ):
     """Texcretize files."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(pwds)
-    if storage is None:
-        typer.secho("Can't proceed without secrets.", fg="red")
-        return
-    storage_secrets = [
-        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
-    ]
-    storage_secrets = list(set(storage_secrets))
-    used_passwords = storage["passwords"]
-
-    if arg_passwords:
-        used_passwords = list(set(used_passwords + pwds))
-    else:
-        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+    (storage_secrets, used_passwords) = prep_secrets(
+        password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+    )
 
     for p in track(paths, description="Texcreting"):
         if in_file:
@@ -688,27 +675,13 @@ def detexcret(
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
     in_file: bool = typer.Option(False, help="Replace the file content"),
 ):
     """Detexcret files."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(pwds)
-    if storage is None:
-        typer.secho("Can't proceed without secrets.", fg="red")
-        return
-    storage_secrets = [
-        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
-    ]
-    storage_secrets = list(set(storage_secrets))
-    used_passwords = storage["passwords"]
-
-    if arg_passwords:
-        used_passwords = list(set(used_passwords + pwds))
-    else:
-        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+    (storage_secrets, used_passwords) = prep_secrets(
+        password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+    )
 
     for p in track(paths, description="Detexcreting"):
         if in_file:
