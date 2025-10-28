@@ -103,7 +103,7 @@ There is a handy cli tool, that can do many ways of encryption-decryption.
 
 Installing is simple with uv:
 
-    uvx --from git+https://github.com/aleksandr-vin/texcret.git@stable texcret
+    uv tool install git+https://github.com/aleksandr-vin/texcret.git@stable
 
 It will need secrets to operate, so let's start with this.
 
