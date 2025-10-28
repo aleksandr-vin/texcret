@@ -19,7 +19,7 @@ window.Texcret = {
   randBytes(n) { const a = new Uint8Array(n); crypto.getRandomValues(a); return a; },
 
   _secretsB64: [], // loaded from largeBlob on authenticate
-  _password: null, // loaded by loadPassword() call
+  _passwords: [], // loaded by loadPassword() call
 
   // Default RP/user (can be overridden via setters)
   rp: null, // { id: location.hostname, name: "Tex(t Se)cret Amnesiac" },
@@ -133,7 +133,7 @@ window.Texcret = {
       onError && onError("❌ Password needs to be longer than 8 chars.");
       return;
     }
-    this._password = password;
+    this._passwords.push(password);
     onOk && onOk();
     this.log("✅ Password loaded.");
   },
@@ -242,7 +242,7 @@ window.Texcret = {
 
   /* ====== Encrypt flow ====== */
   async encrypt(pt, name) {
-    if (this._secretsB64.length == 0 && this._password === null) {
+    if (this._secretsB64.length == 0 && this._passwords.length == 0) {
       this.log("❌ No secrets loaded. Will not encrypt anything.");
       return;
     }
@@ -274,10 +274,10 @@ window.Texcret = {
         recipEntries.push({ salt, wrapIv, wrappedKey });
       }
 
-      if (this._password !== null) {
+      for (const password of this._passwords) {
         const salt = this.randBytes(16);
         const wrapIv = this.randBytes(12);
-        const wrapKey = await this.deriveKeyFromPass(this._password, salt);
+        const wrapKey = await this.deriveKeyFromPass(password, salt);
         const wrappedKey = new Uint8Array(
           await crypto.subtle.encrypt({ name: "AES-GCM", iv: wrapIv }, wrapKey, dataKeyRaw)
         );
@@ -335,24 +335,27 @@ window.Texcret = {
         }
       }
 
-      if (!dataKey && this._password !== null) {
-        for (const r of recipients) {
-          try {
-            const wrapKey = await this.deriveKeyFromPass(this._password, r.salt);
-            const dataKeyRaw = new Uint8Array(
-              await crypto.subtle.decrypt({ name: "AES-GCM", iv: r.wrapIv }, wrapKey, r.wrappedKey)
-            );
-            dataKey = await crypto.subtle.importKey(
-              "raw",
-              dataKeyRaw,
-              { name: "AES-GCM" },
-              false,
-              ["decrypt"]
-            );
-            this.log("✅ Unwrapped data key with the password.");
-            break
-          } catch (_) {
-            this.log("🔁 Wrong secret for password; keep trying.");
+      if (!dataKey) {
+        outer:
+        for (const password of this._passwords) {
+          for (const r of recipients) {
+            try {
+              const wrapKey = await this.deriveKeyFromPass(password, r.salt);
+              const dataKeyRaw = new Uint8Array(
+                await crypto.subtle.decrypt({ name: "AES-GCM", iv: r.wrapIv }, wrapKey, r.wrappedKey)
+              );
+              dataKey = await crypto.subtle.importKey(
+                "raw",
+                dataKeyRaw,
+                { name: "AES-GCM" },
+                false,
+                ["decrypt"]
+              );
+              this.log("✅ Unwrapped data key with the password.");
+              break outer;
+            } catch (_) {
+              this.log("🔁 Wrong secret for password; keep trying.");
+            }
           }
         }
       }
@@ -374,7 +377,7 @@ window.Texcret = {
 
   /* ====== Decrypt text content of all .texcreted elements ====== */
   async decretex(nodes) {
-    if (this._secretsB64.length == 0 && this._password === null) {
+    if (this._secretsB64.length == 0 && this._passwords.length == 0) {
       this.log("⏩️ No secrets loaded. Authenticating...");
       await this.authenticateAndLoadSecret();
       if (this._secretsB64.length == 0) {

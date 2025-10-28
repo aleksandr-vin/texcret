@@ -4,9 +4,24 @@
 <title>Tex(t Se)cret demo</title>
 <style>
   body {
-    font: 16px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    max-width: 700px;
+    align-items: center;
+    /* vertical centering */
+    justify-content: center;
+    /* horizontal centering */
+
+    font: 24px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+
+    max-width: 95%;
     margin: 3rem auto;
+  }
+
+  /* Make all elements inherit font (form elements don’t by default) */
+  *,
+  input,
+  button,
+  textarea,
+  select {
+    font: inherit;
   }
 
   button {
@@ -72,13 +87,13 @@
     <label for="pt">Plaintext:</label>
   </p>
   <p>
-    <textarea name="pt" id="pt" value="" rows="3" cols="60">hello from the sea 🐬</textarea>
+    <textarea name="pt" id="pt" value="" rows="3" cols="59">hello from the sea 🐬</textarea>
   </p>
   <p>
     <label for="ct">Ciphertext (base64):</label>
   </p>
   <p>
-    <textarea name="ct" id="ct" value="" rows="6" cols="60"></textarea>
+    <textarea name="ct" id="ct" value="" rows="6" cols="59"></textarea>
   </p>
 </div>
 </p>
