@@ -17,4 +17,4 @@ dependencies = [
 packages = ['texcret']
 
 [project.scripts]
-texcret = "cli:app"
+texcret = "texcret.cli:app"

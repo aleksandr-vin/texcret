@@ -4,3 +4,4 @@
 *.texcret
 *.texcreted
 *.egg-info
+build/
