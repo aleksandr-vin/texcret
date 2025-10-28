@@ -23,6 +23,13 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
+from importlib.metadata import version, PackageNotFoundError
+
+try:
+    __version__ = version("texcret")
+except PackageNotFoundError:
+    __version__ = "unknown"
+
 app = typer.Typer(add_completion=False, no_args_is_help=True)
 
 STATE_DIR = Path(os.path.expanduser("~/.config/texcrets"))
@@ -695,6 +702,12 @@ def detexcret(
             print(f"Processed {p}")
         else:
             print(f"Processed {p} -> {dst}")
+
+
+@app.command("version")
+def version():
+    """Print version."""
+    print(f"Texcret version: {__version__}")
 
 
 if __name__ == "__main__":
