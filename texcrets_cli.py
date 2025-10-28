@@ -288,16 +288,14 @@ def decrypt_with_passwords(blob: bytes, pwds: list[str]) -> bytes:
         typer.secho(f"Data decrypt failed for {hdr.name}: {e}", fg="red")
         return
 
-    print(f"[green]✓[/green] {hdr.name}")
+    print(f"[green]✓[/green] Decrypted with password: {hdr.name!r}")
     return pt
 
 
 def open_storage(pwds):
     secrets = list_state_secrets()
     if not secrets:
-        print(
-            "[yellow]No secrets stored. Use `add-cred` or `add-platform-cred`.[/yellow]"
-        )
+        print("[yellow]No secrets stored. Load secrets first.[/yellow]")
         return
     blob = base64.decodebytes(secrets.encode(encoding="utf-8"))
     data = decrypt_with_passwords(blob, pwds)
@@ -323,6 +321,8 @@ def list_secrets(
         pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
 
     storage = open_storage(pwds)
+    if storage is None:
+        return
     storage_secretsB64 = storage["secretsB64"]
     storage_passwords = storage["passwords"]
     for i, secret in enumerate(storage_secretsB64, start=1):
@@ -372,7 +372,7 @@ def encrypt(
     paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
-    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
+    arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
 ):
     """Encrypt files."""
     pwds: t.List[str] = []
@@ -380,13 +380,19 @@ def encrypt(
         pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
 
     storage = open_storage(pwds)
+    if storage is None:
+        typer.secho("Can't proceed without secrets.", fg="red")
+        return
     storage_secrets = [
         base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
     ]
+    storage_secrets = list(set(storage_secrets))
     used_passwords = storage["passwords"]
 
     if arg_passwords:
-        used_passwords += pwds
+        used_passwords = list(set(used_passwords + pwds))
+    else:
+        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
 
     for p in track(paths, description="Encrypting"):
         pt = p.read_bytes()
@@ -425,7 +431,7 @@ def decrypt(
     paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
     password: t.List[str] = typer.Option(None, help="Try password(s); '-' to prompt"),
-    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
+    arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
 ):
     """Decrypt files."""
 
@@ -434,13 +440,19 @@ def decrypt(
         pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
 
     storage = open_storage(pwds)
+    if storage is None:
+        typer.secho("Can't proceed without secrets.", fg="red")
+        return
     storage_secrets = [
         base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
     ]
+    storage_secrets = list(set(storage_secrets))
     used_passwords = storage["passwords"]
 
     if arg_passwords:
-        used_passwords += pwds
+        used_passwords = list(set(used_passwords + pwds))
+    else:
+        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
 
     for encp in track(paths, description="Decrypting"):
         blob = encp.read_bytes()
@@ -492,7 +504,14 @@ def decrypt(
 def process_texcret_blocks(
     in_path: Path, out_path: Path, storage_secrets, used_passwords
 ):
-    """Encrypt the content inside {% texcret %}...{% endtexcret %} blocks."""
+    """Encrypt the content inside
+
+    {% texcret %}
+    ...
+    {% endtexcret %}
+
+    blocks.
+    """
 
     # Read the file
     text = in_path.read_text(encoding="utf-8")
@@ -534,140 +553,50 @@ def process_texcret_blocks(
         header = make_header_v2(data_iv, "---", recipients)
         res = base64.encodebytes(header + ct).decode(encoding="utf-8")
         print(
-            f"[green]✓[/green] {inner[:20]!r} -> {res[:20]!r}  (recipients={len(recipients)})"
+            f"[green]✓[/green] Texcreted {inner[:20]!r} -> {res[:20]!r}  (recipients={len(recipients)})"
         )
 
-        return "\n\n[Texcret start]: #\n\n" + res + "\n[Texcret end]: #\n\n"
+        return "\n[Texcret start]: #\n\n" + res + "\n[Texcret end]: #\n"
 
     new_text = pattern.sub(repl, text)
 
     # Write the result
     out_path.write_text(new_text, encoding="utf-8")
-    print(f"Processed {in_path} → {out_path}")
 
 
-@app.command("texcretize")
-def texcretize(
-    paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
-    out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
-    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
-    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
+def process_texcreted_blocks(
+    in_path: Path, out_path: Path, storage_secrets, used_passwords
 ):
-    """Texcretize files."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+    """Decrypt the content inside
 
-    storage = open_storage(pwds)
-    storage_secrets = [
-        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
-    ]
-    used_passwords = storage["passwords"]
+    [Texcret start]: #
+    ...
+    [Texcret end]: #
 
-    if arg_passwords:
-        used_passwords += pwds
+    blocks.
+    """
 
-    for p in track(paths, description="Texcretizing"):
-        (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
-        dst = (out_dir or p.parent) / (p.name + ".texcreted")
-        process_texcret_blocks(p, dst, storage_secrets, used_passwords)
+    # Read the file
+    text = in_path.read_text(encoding="utf-8")
 
+    # Regex: matches [Texcret start]: #...[Texcret end]: #, including multiline content
+    pattern = re.compile(
+        r"\n?\[\s*Texcret\s*start\s*\]:\s*#(.*?)\[\s*Texcret\s*end\s*\]:\s*#\n?",
+        re.DOTALL | re.IGNORECASE,
+    )
 
-@app.command()
-def rotate(
-    paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
-    out_dir: Path = typer.Option(None, help="Output dir (default: in-place)"),
-    # unwrap sources:
-    try_all_creds: bool = typer.Option(True, help="Try all stored creds to unwrap"),
-    cred: t.List[int] = typer.Option(None, help="Try only these roaming indexes"),
-    pcred: t.List[int] = typer.Option(None, help="Try only these platform indexes"),
-    password: t.List[str] = typer.Option(
-        None, help="Plus these passwords to unwrap (repeatable; '-' to prompt)"
-    ),
-    # wrap targets:
-    all_creds: bool = typer.Option(False, help="Wrap to ALL stored creds"),
-    wrap_cred: t.List[int] = typer.Option(None, help="Wrap to these roaming indexes"),
-    wrap_pcred: t.List[int] = typer.Option(None, help="Wrap to these platform indexes"),
-    wrap_password: t.List[str] = typer.Option(
-        None, help="Wrap to these passwords (repeatable; '-' to prompt)"
-    ),
-    keep_backups: bool = typer.Option(True, help="Keep .bak of original"),
-    cert: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS cert for platform (unwrap/wrap)"
-    ),
-    key: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS key for platform (unwrap/wrap)"
-    ),
-    port: int = typer.Option(8443, help="HTTPS port for platform"),
-):
-    """Rewrap .enc files: unwrap with provided sources; rewrap to chosen roaming/platform recipients and/or passwords."""
-    creds = list_state_creds()
-
-    # Source sets
-    src_ridx: t.List[int] = []
-    src_pidx: t.List[int] = []
-    if cred or pcred:
-        src_ridx = list(cred or [])
-        src_pidx = list(pcred or [])
-    elif try_all_creds:
-        for i, c in enumerate(creds):
-            (src_pidx if c["kind"] == "platform" else src_ridx).append(i)
-
-    src_pwds: t.List[str] = []
-    for p in password or []:
-        src_pwds.append(getpass.getpass("Enter password (unwrap): ") if p == "-" else p)
-
-    # Target sets
-    dst_ridx: t.List[int] = []
-    dst_pidx: t.List[int] = []
-    if all_creds:
-        for i, c in enumerate(creds):
-            (dst_pidx if c["kind"] == "platform" else dst_ridx).append(i)
-    else:
-        dst_ridx = list(wrap_cred or [])
-        dst_pidx = list(wrap_pcred or [])
-
-    dst_pwds: t.List[str] = []
-    for p in wrap_password or []:
-        dst_pwds.append(getpass.getpass("Enter password (wrap): ") if p == "-" else p)
-
-    if not dst_ridx and not dst_pidx and not dst_pwds:
-        typer.secho(
-            "No wrap recipients selected. Use --all-creds / --wrap-cred / --wrap-pcred / --wrap-password.",
-            fg="red",
-        )
-        raise typer.Exit(1)
-
-    # Preload roaming secrets for source & targets
-    src_roam_secs: t.List[bytes] = []
-    for i in src_ridx:
-        c = get_cred_by_index(i)
-        if c["kind"] == "roaming":
-            src_roam_secs.append(
-                read_roaming_largeblob_secret(
-                    c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-                )
-            )
-
-    dst_roam_secs: t.List[bytes] = []
-    for i in dst_ridx:
-        c = get_cred_by_index(i)
-        if c["kind"] == "roaming":
-            dst_roam_secs.append(
-                read_roaming_largeblob_secret(
-                    c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-                )
-            )
-
-    for encp in track(paths, description="Rotating"):
-        blob = encp.read_bytes()
+    # Replacement: uppercase the inner block
+    def repl(match: re.Match):
+        inner = match.group(1)
+        stripped = inner.strip()
+        blob = base64.decodebytes(stripped.encode(encoding="utf-8"))
         hdr = parse_header_v2(blob)
         ct = blob[hdr.body_off :]
 
         data_key_raw: t.Optional[bytes] = None
 
-        # Try unwrap with roaming
-        for sec in src_roam_secs:
+        # Try secrets
+        for sec in storage_secrets:
             for r in hdr.recipients:
                 try:
                     data_key_raw = derive_wrapkey_from_passkey(sec, r.salt).decrypt(
@@ -677,31 +606,9 @@ def rotate(
                 except Exception:
                     pass
 
-        # Try unwrap with platform
-        if data_key_raw is None and src_pidx:
-            for i in src_pidx:
-                c = get_cred_by_index(i)
-                if c["kind"] != "platform":
-                    continue
-                if not cert or not key:
-                    raise typer.BadParameter(
-                        "Platform unwrap requires --cert and --key."
-                    )
-                secp = platform_read_secret(
-                    cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-                )
-                for r in hdr.recipients:
-                    try:
-                        data_key_raw = derive_wrapkey_from_passkey(
-                            secp, r.salt
-                        ).decrypt(r.wrap_iv, r.wrapped_key, None)
-                        raise StopIteration
-                    except Exception:
-                        pass
-
-        # Try unwrap with passwords
-        if data_key_raw is None and src_pwds:
-            for pwd in src_pwds:
+        # Try passwords
+        if data_key_raw is None:
+            for pwd in used_passwords:
                 for r in hdr.recipients:
                     try:
                         data_key_raw = derive_wrapkey_from_password(
@@ -712,64 +619,108 @@ def rotate(
                         pass
 
         if data_key_raw is None:
-            typer.secho(f"Failed to unwrap key for {encp.name}", fg="red")
-            continue
-
-        # Rewrap recipients
-        recipients: t.List[Recipient] = []
-
-        # Reuse same data_iv/name and ciphertext; we only rewrap the data key.
-        # Roaming targets
-        for sec in dst_roam_secs:
-            salt = os.urandom(SALT_LEN)
-            wrap_iv = os.urandom(WRAP_IV_LEN)
-            wrapped = derive_wrapkey_from_passkey(sec, salt).encrypt(
-                wrap_iv, data_key_raw, None
+            typer.secho(
+                f"Failed to unwrap key for {hdr.name} (no matching secret).", fg="red"
             )
-            recipients.append(Recipient(salt, wrap_iv, wrapped))
+            return inner
 
-        # Platform targets (fetch per target)
-        for i in dst_pidx:
-            c = get_cred_by_index(i)
-            if c["kind"] != "platform":
-                continue
-            if not cert or not key:
-                raise typer.BadParameter("Platform wrap requires --cert and --key.")
-            secp = platform_read_secret(
-                cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-            )
-            salt = os.urandom(SALT_LEN)
-            wrap_iv = os.urandom(WRAP_IV_LEN)
-            wrapped = derive_wrapkey_from_passkey(secp, salt).encrypt(
-                wrap_iv, data_key_raw, None
-            )
-            recipients.append(Recipient(salt, wrap_iv, wrapped))
+        try:
+            pt = AESGCM(data_key_raw).decrypt(hdr.data_iv, ct, None)
+        except Exception as e:
+            typer.secho(f"Data decrypt failed for {hdr.name}: {e}", fg="red")
+            return inner
 
-        # Password targets
-        for pwd in dst_pwds:
-            salt = os.urandom(SALT_LEN)
-            wrap_iv = os.urandom(WRAP_IV_LEN)
-            wrapped = derive_wrapkey_from_password(pwd, salt).encrypt(
-                wrap_iv, data_key_raw, None
-            )
-            recipients.append(Recipient(salt, wrap_iv, wrapped))
+        res = pt.decode(encoding="utf-8")
+        print(f"[green]✓[/green] Detexcreted {stripped[:20]!r} -> {res[:20]!r}")
 
-        new_header = make_header_v2(hdr.data_iv, hdr.name, recipients)
-        out = new_header + ct
+        return "{% texcret %}" + res + "{% endtexcret %}"
 
-        dst = (out_dir or encp.parent) / encp.name
-        tmp = dst.with_suffix(dst.suffix + ".tmp")
-        tmp.write_bytes(out)
-        if (out_dir is None) and (dst.exists()):
-            bak = dst.with_suffix(dst.suffix + ".bak")
-            try:
-                if bak.exists():
-                    bak.unlink()
-                dst.replace(bak)
-            except Exception:
-                pass
-        tmp.replace(dst)
-        print(f"[green]✓[/green] rewrapped {encp.name} (recipients={len(recipients)})")
+    new_text = pattern.sub(repl, text)
+
+    # Write the result
+    out_path.write_text(new_text, encoding="utf-8")
+
+
+@app.command("texcret")
+def texcret(
+    paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
+    out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    in_file: bool = typer.Option(False, help="Replace the file content"),
+):
+    """Texcretize files."""
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    if storage is None:
+        typer.secho("Can't proceed without secrets.", fg="red")
+        return
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
+    ]
+    storage_secrets = list(set(storage_secrets))
+    used_passwords = storage["passwords"]
+
+    if arg_passwords:
+        used_passwords = list(set(used_passwords + pwds))
+    else:
+        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+
+    for p in track(paths, description="Texcreting"):
+        if in_file:
+            dst = p
+        else:
+            (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
+            dst = (out_dir or p.parent) / (p.name + ".texcreted")
+        process_texcret_blocks(p, dst, storage_secrets, used_passwords)
+        if p == dst:
+            print(f"Processed {p}")
+        else:
+            print(f"Processed {p} -> {dst}")
+
+
+@app.command("detexcret")
+def detexcret(
+    paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
+    out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    in_file: bool = typer.Option(False, help="Replace the file content"),
+):
+    """Detexcret files."""
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    if storage is None:
+        typer.secho("Can't proceed without secrets.", fg="red")
+        return
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
+    ]
+    storage_secrets = list(set(storage_secrets))
+    used_passwords = storage["passwords"]
+
+    if arg_passwords:
+        used_passwords = list(set(used_passwords + pwds))
+    else:
+        used_passwords = list(set([p for p in used_passwords if p not in pwds]))
+
+    for p in track(paths, description="Detexcreting"):
+        if in_file:
+            dst = p
+        else:
+            (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
+            dst = (out_dir or p.parent) / (p.name + ".texcreted")
+        process_texcreted_blocks(p, dst, storage_secrets, used_passwords)
+        if p == dst:
+            print(f"Processed {p}")
+        else:
+            print(f"Processed {p} -> {dst}")
 
 
 if __name__ == "__main__":
