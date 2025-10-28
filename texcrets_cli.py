@@ -2,6 +2,7 @@ import base64
 import getpass
 import json
 import os
+import re
 import ssl
 import struct
 import threading
@@ -15,7 +16,6 @@ from urllib.parse import urlparse, parse_qs
 
 import typer
 from rich import print
-from rich.table import Table
 from rich.progress import track
 
 from cryptography.hazmat.primitives import hashes
@@ -487,6 +487,90 @@ def decrypt(
         dst = (out_dir or encp.parent) / hdr.name
         dst.write_bytes(pt)
         print(f"[green]✓[/green] {encp} -> {dst}")
+
+
+def process_texcret_blocks(
+    in_path: Path, out_path: Path, storage_secrets, used_passwords
+):
+    """Encrypt the content inside {% texcret %}...{% endtexcret %} blocks."""
+
+    # Read the file
+    text = in_path.read_text(encoding="utf-8")
+
+    # Regex: matches {% texcret %}...{% endtexcret %}, including multiline content
+    pattern = re.compile(
+        r"{%\s*texcret\s*%}(.*?){%\s*endtexcret\s*%}",
+        re.DOTALL | re.IGNORECASE,
+    )
+
+    # Replacement: uppercase the inner block
+    def repl(match: re.Match):
+        inner = match.group(1)
+
+        pt = inner.encode(encoding="utf-8")
+        data_key_raw = os.urandom(32)
+        data_iv = os.urandom(DATA_IV_LEN)
+        ct = AESGCM(data_key_raw).encrypt(data_iv, pt, None)
+
+        recipients: t.List[Recipient] = []
+
+        # secrets wraps
+        for sec in storage_secrets:
+            salt = os.urandom(SALT_LEN)
+            wrap_iv = os.urandom(WRAP_IV_LEN)
+            wrapped = derive_wrapkey_from_passkey(sec, salt).encrypt(
+                wrap_iv, data_key_raw, None
+            )
+            recipients.append(Recipient(salt, wrap_iv, wrapped))
+        # password wraps
+        for pwd in used_passwords:
+            salt = os.urandom(SALT_LEN)
+            wrap_iv = os.urandom(WRAP_IV_LEN)
+            wrapped = derive_wrapkey_from_password(pwd, salt).encrypt(
+                wrap_iv, data_key_raw, None
+            )
+            recipients.append(Recipient(salt, wrap_iv, wrapped))
+
+        header = make_header_v2(data_iv, "---", recipients)
+        res = base64.encodebytes(header + ct).decode(encoding="utf-8")
+        print(
+            f"[green]✓[/green] {inner[:20]!r} -> {res[:20]!r}  (recipients={len(recipients)})"
+        )
+
+        return "\n\n[Texcret start]: #\n\n" + res + "\n[Texcret end]: #\n\n"
+
+    new_text = pattern.sub(repl, text)
+
+    # Write the result
+    out_path.write_text(new_text, encoding="utf-8")
+    print(f"Processed {in_path} → {out_path}")
+
+
+@app.command("texcretize")
+def texcretize(
+    paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
+    out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
+):
+    """Texcretize files."""
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
+    ]
+    used_passwords = storage["passwords"]
+
+    if arg_passwords:
+        used_passwords += pwds
+
+    for p in track(paths, description="Texcretizing"):
+        (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
+        dst = (out_dir or p.parent) / (p.name + ".texcreted")
+        process_texcret_blocks(p, dst, storage_secrets, used_passwords)
 
 
 @app.command()
