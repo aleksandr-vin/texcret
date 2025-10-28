@@ -292,23 +292,13 @@ def decrypt_with_passwords(blob: bytes, pwds: list[str]) -> bytes:
     return pt
 
 
-@app.command("list-secrets")
-def list_secrets(
-    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
-    show_secrets: bool = typer.Option(False, help="Show secrets"),
-):
-    """List stored secrets."""
+def open_storage(pwds):
     secrets = list_state_secrets()
     if not secrets:
         print(
             "[yellow]No secrets stored. Use `add-cred` or `add-platform-cred`.[/yellow]"
         )
         return
-
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
     blob = base64.decodebytes(secrets.encode(encoding="utf-8"))
     data = decrypt_with_passwords(blob, pwds)
     if data is None:
@@ -319,7 +309,22 @@ def list_secrets(
     storage_passwords = open_storage["passwords"]
     print(f"{len(storage_secretsB64)} secrets decrypted")
     print(f"{len(storage_passwords)} passwords decrypted")
+    return open_storage
 
+
+@app.command("list-secrets")
+def list_secrets(
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    show_secrets: bool = typer.Option(False, help="Show secrets"),
+):
+    """List stored secrets."""
+    pwds: t.List[str] = []
+    for p in password or []:
+        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+
+    storage = open_storage(pwds)
+    storage_secretsB64 = storage["secretsB64"]
+    storage_passwords = storage["passwords"]
     for i, secret in enumerate(storage_secretsB64, start=1):
         if show_secrets:
             xx = base64.decodebytes(secret.encode(encoding="utf-8"))
@@ -332,7 +337,7 @@ def list_secrets(
         if show_secrets:
             s = storage_password
         else:
-            s = storage_password[:5] + "..." + storage_password[-5:]
+            s = storage_password[:3] + "..." + storage_password[-2:]
         print(str(i), "-", s)
 
 
@@ -362,109 +367,26 @@ def load_secrets(
     save_state(st)
 
 
-# Helper to fetch secrets for selected creds (roaming + platform)
-def gather_selected_secrets(
-    roaming_idx: t.List[int],
-    platform_idx: t.List[int],
-    cert: t.Optional[Path],
-    key: t.Optional[Path],
-    port: int,
-) -> t.List[bytes]:
-    secrets: t.List[bytes] = []
-    # Roaming
-    for idx in roaming_idx:
-        c = get_cred_by_index(idx)
-        if c["kind"] != "roaming":
-            continue
-        secrets.append(
-            read_roaming_largeblob_secret(
-                c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-            )
-        )
-    # Platform (batch through a single server instance per run is already OK because we open once per secret)
-    for idx in platform_idx:
-        c = get_cred_by_index(idx)
-        if c["kind"] != "platform":
-            continue
-        if not cert or not key:
-            raise typer.BadParameter("Platform secret requires --cert and --key.")
-        secrets.append(
-            platform_read_secret(
-                cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-            )
-        )
-    return secrets
-
-
-@app.command()
+@app.command("encrypt")
 def encrypt(
     paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
-    all_creds: bool = typer.Option(
-        False, help="Wrap for ALL stored credentials (both kinds)"
-    ),
-    cred: t.List[int] = typer.Option(
-        None, help="Wrap for these indexes (repeatable) — roaming"
-    ),
-    pcred: t.List[int] = typer.Option(
-        None, help="Wrap for these indexes (repeatable) — platform"
-    ),
-    password: t.List[str] = typer.Option(
-        None, help="Add password recipient(s). Use '-' to prompt."
-    ),
-    cert: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS cert for platform secrets"
-    ),
-    key: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS key for platform secrets"
-    ),
-    port: int = typer.Option(8443, help="HTTPS port for platform secrets"),
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
 ):
-    """Encrypt files (YKLB2): fresh dataKey; wrap for selected roaming/platform creds and/or passwords."""
-    creds = list_state_creds()
-    ridx: t.List[int] = []
-    pidx: t.List[int] = []
-    if all_creds:
-        for i, c in enumerate(creds):
-            (pidx if c["kind"] == "platform" else ridx).append(i)
-    else:
-        ridx = list(cred or [])
-        pidx = list(pcred or [])
-
+    """Encrypt files."""
     pwds: t.List[str] = []
     for p in password or []:
         pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
 
-    if not ridx and not pidx and not pwds:
-        typer.secho(
-            "No recipients selected. Use --all-creds / --cred / --pcred / --password.",
-            fg="red",
-        )
-        raise typer.Exit(1)
+    storage = open_storage(pwds)
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
+    ]
+    used_passwords = storage["passwords"]
 
-    # Fetch required secrets (will open browser for platform creds)
-    secrets_roaming: t.List[bytes] = []
-    secrets_platform: t.List[bytes] = []
-    if ridx:
-        for i in ridx:
-            c = get_cred_by_index(i)
-            if c["kind"] == "roaming":
-                secrets_roaming.append(
-                    read_roaming_largeblob_secret(
-                        c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-                    )
-                )
-    if pidx:
-        for i in pidx:
-            c = get_cred_by_index(i)
-            if c["kind"] == "platform":
-                if not cert or not key:
-                    raise typer.BadParameter("Platform wrap requires --cert and --key.")
-                secrets_platform.append(
-                    platform_read_secret(
-                        cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-                    )
-                )
+    if arg_passwords:
+        used_passwords += pwds
 
     for p in track(paths, description="Encrypting"):
         pt = p.read_bytes()
@@ -474,16 +396,8 @@ def encrypt(
 
         recipients: t.List[Recipient] = []
 
-        # roaming wraps
-        for sec in secrets_roaming:
-            salt = os.urandom(SALT_LEN)
-            wrap_iv = os.urandom(WRAP_IV_LEN)
-            wrapped = derive_wrapkey_from_passkey(sec, salt).encrypt(
-                wrap_iv, data_key_raw, None
-            )
-            recipients.append(Recipient(salt, wrap_iv, wrapped))
-        # platform wraps
-        for sec in secrets_platform:
+        # secrets wraps
+        for sec in storage_secrets:
             salt = os.urandom(SALT_LEN)
             wrap_iv = os.urandom(WRAP_IV_LEN)
             wrapped = derive_wrapkey_from_passkey(sec, salt).encrypt(
@@ -491,7 +405,7 @@ def encrypt(
             )
             recipients.append(Recipient(salt, wrap_iv, wrapped))
         # password wraps
-        for pwd in pwds:
+        for pwd in used_passwords:
             salt = os.urandom(SALT_LEN)
             wrap_iv = os.urandom(WRAP_IV_LEN)
             wrapped = derive_wrapkey_from_password(pwd, salt).encrypt(
@@ -501,7 +415,7 @@ def encrypt(
 
         header = make_header_v2(data_iv, p.name, recipients)
         (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
-        dst = (out_dir or p.parent) / (p.name + ".enc")
+        dst = (out_dir or p.parent) / (p.name + ".texcret")
         dst.write_bytes(header + ct)
         print(f"[green]✓[/green] {p} -> {dst}  (recipients={len(recipients)})")
 
@@ -510,44 +424,23 @@ def encrypt(
 def decrypt(
     paths: t.List[Path] = typer.Argument(..., exists=True, readable=True),
     out_dir: Path = typer.Option(None, help="Output dir (default: alongside input)"),
-    try_all_creds: bool = typer.Option(True, help="Try all stored creds (both kinds)"),
-    cred: t.List[int] = typer.Option(None, help="Try only these roaming indexes"),
-    pcred: t.List[int] = typer.Option(None, help="Try only these platform indexes"),
     password: t.List[str] = typer.Option(None, help="Try password(s); '-' to prompt"),
-    cert: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS cert for platform"
-    ),
-    key: t.Optional[Path] = typer.Option(
-        None, exists=True, help="TLS key for platform"
-    ),
-    port: int = typer.Option(8443, help="HTTPS port for platform"),
+    arg_passwords: bool = typer.Option(True, help="Use argument passwords"),
 ):
-    """Decrypt v2 files: try roaming/platform secrets and/or passwords to unwrap the data key."""
-    creds = list_state_creds()
-    ridx: t.List[int] = []
-    pidx: t.List[int] = []
-    if cred or pcred:
-        ridx = list(cred or [])
-        pidx = list(pcred or [])
-    elif try_all_creds:
-        for i, c in enumerate(creds):
-            (pidx if c["kind"] == "platform" else ridx).append(i)
+    """Decrypt files."""
 
     pwds: t.List[str] = []
     for p in password or []:
         pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
 
-    # Preload roaming secrets
-    secrets_roaming: t.List[bytes] = []
-    for i in ridx:
-        c = get_cred_by_index(i)
-        if c["kind"] == "roaming":
-            secrets_roaming.append(
-                read_roaming_largeblob_secret(
-                    c["rp_id"], c["origin"], bytes.fromhex(c["cred_id_hex"])
-                )
-            )
-    # Platform secrets will be pulled on-demand per file (one read can be reused across files, but we keep it simple)
+    storage = open_storage(pwds)
+    storage_secrets = [
+        base64.decodebytes(s.encode(encoding="utf-8")) for s in storage["secretsB64"]
+    ]
+    used_passwords = storage["passwords"]
+
+    if arg_passwords:
+        used_passwords += pwds
 
     for encp in track(paths, description="Decrypting"):
         blob = encp.read_bytes()
@@ -556,8 +449,8 @@ def decrypt(
 
         data_key_raw: t.Optional[bytes] = None
 
-        # Try roaming
-        for sec in secrets_roaming:
+        # Try secrets
+        for sec in storage_secrets:
             for r in hdr.recipients:
                 try:
                     data_key_raw = derive_wrapkey_from_passkey(sec, r.salt).decrypt(
@@ -566,31 +459,10 @@ def decrypt(
                     raise StopIteration
                 except Exception:
                     pass
-        # Try platform (pull once if needed)
-        if data_key_raw is None and pidx:
-            for i in pidx:
-                c = get_cred_by_index(i)
-                if c["kind"] != "platform":
-                    continue
-                if not cert or not key:
-                    raise typer.BadParameter(
-                        "Platform decrypt requires --cert and --key."
-                    )
-                secp = platform_read_secret(
-                    cert, key, c["rp_id"], c["origin"], port, c.get("cred_id_b64")
-                )
-                for r in hdr.recipients:
-                    try:
-                        data_key_raw = derive_wrapkey_from_passkey(
-                            secp, r.salt
-                        ).decrypt(r.wrap_iv, r.wrapped_key, None)
-                        raise StopIteration
-                    except Exception:
-                        pass
 
         # Try passwords
         if data_key_raw is None:
-            for pwd in pwds:
+            for pwd in used_passwords:
                 for r in hdr.recipients:
                     try:
                         data_key_raw = derive_wrapkey_from_password(
