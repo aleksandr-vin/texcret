@@ -13,6 +13,8 @@ dependencies = [
     "uvicorn>=0.38.0",
 ]
 
+[tool.setuptools]
+packages = ['texcret']
 
 [project.scripts]
-texcret = "texcrets_cli:app"
+texcret = "cli:app"

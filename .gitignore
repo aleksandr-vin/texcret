@@ -3,3 +3,4 @@
 *.pem
 *.texcret
 *.texcreted
+*.egg-info
