@@ -44,6 +44,19 @@ SALT_LEN = 16  # salt for HKDF/PBKDF2
 PASSKEY_INFO = b"YK-largeBlob-text"
 SECRET_LEN = 32
 
+# ===== regexes =====
+
+# Regex: matches {% texcret %}...{% endtexcret %}, including multiline content
+TEXCRET_BLOCK_RE = re.compile(
+    r"{%\s*texcret\s*%}(.*?){%\s*endtexcret\s*%}",
+    re.DOTALL | re.IGNORECASE,
+)
+
+# Regex: matches [Texcret start]: #...[Texcret end]: #, including multiline content
+TEXCRETED_BLOCK_RE = re.compile(
+    r"\n?\[\s*Texcret\s*start\s*\]:\s*#(.*?)\[\s*Texcret\s*end\s*\]:\s*#\n?",
+    re.DOTALL | re.IGNORECASE,
+)
 
 # ---------- Utilities ----------
 
@@ -505,6 +518,13 @@ def decrypt(
         print(f"[green]✓[/green] {encp} -> {dst}")
 
 
+def has_blocks(regex, in_path):
+    """Check if file has texcret or texcreted blocks."""
+    # Read the file
+    text = in_path.read_text(encoding="utf-8")
+    return regex.search(text) is not None
+
+
 def process_texcret_blocks(
     in_path: Path, out_path: Path, storage_secrets, used_passwords
 ):
@@ -519,12 +539,6 @@ def process_texcret_blocks(
 
     # Read the file
     text = in_path.read_text(encoding="utf-8")
-
-    # Regex: matches {% texcret %}...{% endtexcret %}, including multiline content
-    pattern = re.compile(
-        r"{%\s*texcret\s*%}(.*?){%\s*endtexcret\s*%}",
-        re.DOTALL | re.IGNORECASE,
-    )
 
     # Replacement: uppercase the inner block
     def repl(match: re.Match):
@@ -562,7 +576,7 @@ def process_texcret_blocks(
 
         return "\n[Texcret start]: #\n\n" + res + "\n\n[Texcret end]: #\n"
 
-    new_text = pattern.sub(repl, text)
+    new_text = TEXCRET_BLOCK_RE.sub(repl, text)
 
     # Write the result
     out_path.write_text(new_text, encoding="utf-8")
@@ -582,12 +596,6 @@ def process_texcreted_blocks(
 
     # Read the file
     text = in_path.read_text(encoding="utf-8")
-
-    # Regex: matches [Texcret start]: #...[Texcret end]: #, including multiline content
-    pattern = re.compile(
-        r"\n?\[\s*Texcret\s*start\s*\]:\s*#(.*?)\[\s*Texcret\s*end\s*\]:\s*#\n?",
-        re.DOTALL | re.IGNORECASE,
-    )
 
     # Replacement: uppercase the inner block
     def repl(match: re.Match):
@@ -639,7 +647,7 @@ def process_texcreted_blocks(
 
         return "{% texcret %}" + res + "{% endtexcret %}"
 
-    new_text = pattern.sub(repl, text)
+    new_text = TEXCRETED_BLOCK_RE.sub(repl, text)
 
     # Write the result
     out_path.write_text(new_text, encoding="utf-8")
@@ -656,11 +664,25 @@ def texcret(
     in_file: bool = typer.Option(False, help="Replace the file content"),
 ):
     """Texcretize files."""
+
+    # Check if files need texcreting
+    action_paths = []
+    for p in track(paths, description="Searching for blocks to texcret"):
+        if has_blocks(TEXCRET_BLOCK_RE, p):
+            print(f"    Found in {p}")
+            action_paths.append(p)
+        else:
+            print(f"Not found in {p}")
+
+    if len(action_paths) == 0:
+        print("Nothing to do.")
+        return
+
     (storage_secrets, used_passwords) = prep_secrets(
         origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
     )
 
-    for p in track(paths, description="Texcreting"):
+    for p in track(action_paths, description="Texcreting"):
         if in_file:
             dst = p
         else:
@@ -684,11 +706,25 @@ def detexcret(
     in_file: bool = typer.Option(False, help="Replace the file content"),
 ):
     """Detexcret files."""
+
+    # Check if files need texcreting
+    action_paths = []
+    for p in track(paths, description="Searching for blocks to detexcret"):
+        if has_blocks(TEXCRETED_BLOCK_RE, p):
+            print(f"    Found in {p}")
+            action_paths.append(p)
+        else:
+            print(f"Not found in {p}")
+
+    if len(action_paths) == 0:
+        print("Nothing to do.")
+        return
+
     (storage_secrets, used_passwords) = prep_secrets(
         origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
     )
 
-    for p in track(paths, description="Detexcreting"):
+    for p in track(action_paths, description="Detexcreting"):
         if in_file:
             dst = p
         else:
