@@ -341,37 +341,6 @@ def load_secrets(
     save_state(origin, st)
 
 
-@app.command("list-secrets")
-def list_secrets(
-    origin: str = typer.Option("https://localhost", help="Secrerts origin"),
-    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
-    show_secrets: bool = typer.Option(False, help="Show secrets"),
-):
-    """List stored secrets."""
-    pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
-
-    storage = open_storage(origin, pwds)
-    if storage == {}:
-        return
-    storage_secretsB64 = storage["secretsB64"]
-    storage_passwords = storage["passwords"]
-    for i, secret in enumerate(storage_secretsB64, start=1):
-        if show_secrets:
-            sec = base64.decodebytes(secret.encode(encoding="utf-8"))
-            print(str(i), "-", secret, sec.hex())
-        else:
-            s = secret[:5] + "..." + secret[-5:]
-            print(str(i), "-", s)
-    for i, storage_password in enumerate(storage_passwords, start=1):
-        if show_secrets:
-            s = storage_password
-        else:
-            s = storage_password[:3] + "..." + storage_password[-2:]
-        print(str(i), "-", s)
-
-
 def prep_secrets(
     origin: str,
     password: list[str] | None,
@@ -388,7 +357,7 @@ def prep_secrets(
         raise typer.Abort(11)
     storage_secrets = [
         base64.decodebytes(s.encode(encoding="utf-8"))
-        for s in storage.get("secrets", [])
+        for s in storage.get("secretsB64", [])
     ]
     storage_secrets = list(set(storage_secrets))
     used_passwords = storage.get("passwords", [])
@@ -399,6 +368,34 @@ def prep_secrets(
         used_passwords = list(set([p for p in used_passwords if p not in pwds]))
 
     return (storage_secrets, used_passwords)
+
+
+@app.command("list-secrets")
+def list_secrets(
+    origin: str = typer.Option("https://localhost", help="Secrerts origin"),
+    password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
+    show_secrets: bool = typer.Option(False, help="Show secrets"),
+    arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+):
+    """List stored secrets."""
+
+    (storage_secrets, used_passwords) = prep_secrets(
+        origin, password, use_arg_passwords=arg_passwords, force_secrets=False
+    )
+
+    for i, secret in enumerate(storage_secrets, start=1):
+        secretB64 = base64.encodebytes(secret).decode(encoding="utf-8").strip()
+        if show_secrets:
+            print(str(i), "[S]", f"{secretB64!r}", secret.hex())
+        else:
+            s = secretB64[:5] + "..." + secretB64[-5:]
+            print(str(i), "[S]", f"{s!r}")
+    for i, storage_password in enumerate(used_passwords, start=1):
+        if show_secrets:
+            s = storage_password
+        else:
+            s = storage_password[:3] + "..." + storage_password[-2:]
+        print(str(i), "[P]", f"{s!r}")
 
 
 @app.command("encrypt")
@@ -663,6 +660,9 @@ def texcret(
         origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
     )
 
+    print(storage_secrets)
+    print(used_passwords)
+
     for p in track(paths, description="Texcreting"):
         if in_file:
             dst = p
@@ -696,7 +696,7 @@ def detexcret(
             dst = p
         else:
             (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
-            dst = (out_dir or p.parent) / (p.name + ".texcreted")
+            dst = (out_dir or p.parent) / (p.name + ".detexcreted")
         process_texcreted_blocks(p, dst, storage_secrets, used_passwords)
         if p == dst:
             print(f"Processed {p}")
