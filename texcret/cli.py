@@ -364,7 +364,7 @@ def prep_secrets(
     reset_external_cache: bool,
 ):
     pwds: t.List[str] = []
-    for i, p in enumerate(password, start=1) or []:
+    for i, p in enumerate(password or [], start=1):
         if p == "-":
             try:
                 cache_key_info = f"texcrets-{origin}-{i}"
