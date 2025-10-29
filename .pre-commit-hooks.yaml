@@ -1,0 +1,35 @@
+- id: texcret-check-markers
+  name: texcret marker checker
+  description: >
+    Fails if any staged text file contains '{% texcret %}' or '{% endtexcret %}' markers,
+    indicating that plaintext secure blocks were not processed.
+    Skips .pre-commit-config.yaml and other config files.
+  entry: >
+    bash -c '
+    for f in "$@"; do
+      case "$f" in
+        .pre-commit-config.yaml) continue ;;  # skip this file
+      esac
+      if grep -HnE "{%[[:space:]]*(end)?texcret[[:space:]]*%}" "$f"; then
+        echo
+        echo "❌ Found unprocessed texcret markers in $f — please run texcret first."
+        exit 1
+      fi
+    done
+    ' --
+  language: system
+  pass_filenames: true
+  types: [text]
+  stages: [pre-commit]
+- id: texcret
+  name: texcret encryptor
+  description: >
+    Encrypts modified text files using texcret before commit.
+  entry: texcret texcret --in-file --force-secrets --no-arg-passwords --password -
+  language: system
+  pass_filenames: true
+  types: [text]
+  stages: [pre-commit]
+  args: [
+    # "--origin", "https://aleksandr.vin",
+  ]
