@@ -384,7 +384,7 @@ def list_secrets(
     )
 
     for i, secret in enumerate(storage_secrets, start=1):
-        secretB64 = base64.encodebytes(secret).decode(encoding="utf-8").strip()
+        secretB64 = base64.b64encode(secret).decode(encoding="utf-8")
         if show_secrets:
             print(str(i), "[S]", f"{secretB64!r}", secret.hex())
         else:
@@ -555,12 +555,12 @@ def process_texcret_blocks(
             recipients.append(Recipient(salt, wrap_iv, wrapped))
 
         header = make_header_v2(data_iv, "---", recipients)
-        res = base64.encodebytes(header + ct).decode(encoding="utf-8")
+        res = base64.b64encode(header + ct).decode(encoding="utf-8")
         print(
             f"[green]✓[/green] Texcreted {inner[:20]!r} -> {res[:20]!r}  (recipients={len(recipients)})"
         )
 
-        return "\n[Texcret start]: #\n\n" + res + "\n[Texcret end]: #\n"
+        return "\n[Texcret start]: #\n\n" + res + "\n\n[Texcret end]: #\n"
 
     new_text = pattern.sub(repl, text)
 
