@@ -660,9 +660,6 @@ def texcret(
         origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
     )
 
-    print(storage_secrets)
-    print(used_passwords)
-
     for p in track(paths, description="Texcreting"):
         if in_file:
             dst = p
