@@ -1,5 +1,5 @@
 import base64
-import getpass
+from getpass import getpass
 import json
 import os
 import re
@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from importlib.metadata import version, PackageNotFoundError
+from .pinentry import call_pinentry_getpin, clear_pinentry_external_cache, PinentryError
 
 try:
     __version__ = version("texcret")
@@ -359,10 +360,29 @@ def prep_secrets(
     password: list[str] | None,
     use_arg_passwords: bool,
     force_secrets: bool,
+    allow_external_password_cache: bool,
+    reset_external_cache: bool,
 ):
     pwds: t.List[str] = []
-    for p in password or []:
-        pwds.append(getpass.getpass("Enter password: ") if p == "-" else p)
+    for i, p in enumerate(password, start=1) or []:
+        if p == "-":
+            try:
+                cache_key_info = f"texcrets-{origin}-{i}"
+                if reset_external_cache:
+                    clear_pinentry_external_cache(cache_key_info)
+                pwd = call_pinentry_getpin(
+                    "Enter password:",
+                    desc=f"Password #{i}",
+                    title="Texcret",
+                    allow_external_password_cache=allow_external_password_cache,
+                    cache_key_info=cache_key_info,
+                )
+            except FileNotFoundError:
+                pwd = getpass(f"Enter password #{i}: ")
+            except PinentryError as err:
+                typer.secho(str(err), fg="red")
+                raise typer.Abort(11) from err
+            pwds.append(pwd)
 
     storage = open_storage(origin, pwds)
     if storage == {} and force_secrets:
@@ -389,11 +409,22 @@ def list_secrets(
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
     show_secrets: bool = typer.Option(False, help="Show secrets"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
+    allow_external_password_cache: bool = typer.Option(
+        True, help="Allow external password cache (if pinentry is available)"
+    ),
+    reset_external_cache: bool = typer.Option(
+        False, help="Reset external password cache (if pinentry is available)"
+    ),
 ):
     """List stored secrets."""
 
     (storage_secrets, used_passwords) = prep_secrets(
-        origin, password, use_arg_passwords=arg_passwords, force_secrets=False
+        origin,
+        password,
+        use_arg_passwords=arg_passwords,
+        force_secrets=False,
+        allow_external_password_cache=allow_external_password_cache,
+        reset_external_cache=reset_external_cache,
     )
 
     for i, secret in enumerate(storage_secrets, start=1):
@@ -419,10 +450,21 @@ def encrypt(
     password: t.List[str] = typer.Option(None, help="Password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
     force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
+    allow_external_password_cache: bool = typer.Option(
+        True, help="Allow external password cache (if pinentry is available)"
+    ),
+    reset_external_cache: bool = typer.Option(
+        False, help="Reset external password cache (if pinentry is available)"
+    ),
 ):
     """Encrypt files."""
     (storage_secrets, used_passwords) = prep_secrets(
-        origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+        origin,
+        password,
+        use_arg_passwords=arg_passwords,
+        force_secrets=force_secrets,
+        allow_external_password_cache=allow_external_password_cache,
+        reset_external_cache=reset_external_cache,
     )
 
     for p in track(paths, description="Encrypting"):
@@ -465,10 +507,21 @@ def decrypt(
     password: t.List[str] = typer.Option(None, help="Try password(s); '-' to prompt"),
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
     force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
+    allow_external_password_cache: bool = typer.Option(
+        True, help="Allow external password cache (if pinentry is available)"
+    ),
+    reset_external_cache: bool = typer.Option(
+        False, help="Reset external password cache (if pinentry is available)"
+    ),
 ):
     """Decrypt files."""
     (storage_secrets, used_passwords) = prep_secrets(
-        origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+        origin,
+        password,
+        use_arg_passwords=arg_passwords,
+        force_secrets=force_secrets,
+        allow_external_password_cache=allow_external_password_cache,
+        reset_external_cache=reset_external_cache,
     )
 
     for encp in track(paths, description="Decrypting"):
@@ -662,6 +715,12 @@ def texcret(
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
     force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
     in_file: bool = typer.Option(False, help="Replace the file content"),
+    allow_external_password_cache: bool = typer.Option(
+        True, help="Allow external password cache (if pinentry is available)"
+    ),
+    reset_external_cache: bool = typer.Option(
+        False, help="Reset external password cache (if pinentry is available)"
+    ),
 ):
     """Texcretize files."""
 
@@ -679,7 +738,12 @@ def texcret(
         return
 
     (storage_secrets, used_passwords) = prep_secrets(
-        origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+        origin,
+        password,
+        use_arg_passwords=arg_passwords,
+        force_secrets=force_secrets,
+        allow_external_password_cache=allow_external_password_cache,
+        reset_external_cache=reset_external_cache,
     )
 
     for p in track(action_paths, description="Texcreting"):
@@ -704,6 +768,12 @@ def detexcret(
     arg_passwords: bool = typer.Option(False, help="Use argument passwords"),
     force_secrets: bool = typer.Option(True, help="Continue only if secrets opened"),
     in_file: bool = typer.Option(False, help="Replace the file content"),
+    allow_external_password_cache: bool = typer.Option(
+        True, help="Allow external password cache (if pinentry is available)"
+    ),
+    reset_external_cache: bool = typer.Option(
+        False, help="Reset external password cache (if pinentry is available)"
+    ),
 ):
     """Detexcret files."""
 
@@ -721,7 +791,12 @@ def detexcret(
         return
 
     (storage_secrets, used_passwords) = prep_secrets(
-        origin, password, use_arg_passwords=arg_passwords, force_secrets=force_secrets
+        origin,
+        password,
+        use_arg_passwords=arg_passwords,
+        force_secrets=force_secrets,
+        allow_external_password_cache=allow_external_password_cache,
+        reset_external_cache=reset_external_cache,
     )
 
     for p in track(action_paths, description="Detexcreting"):
