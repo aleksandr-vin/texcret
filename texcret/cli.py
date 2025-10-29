@@ -385,6 +385,11 @@ def prep_secrets(
             pwds.append(pwd)
 
     storage = open_storage(origin, pwds)
+    if storage == {} and allow_external_password_cache:
+        print(
+            "[blue](It could be that a password obtained from cache was wrong or outdated, "
+            "try resetting the cache with [cyan bold]--reset-external-cache[/cyan bold])[/blue]"
+        )
     if storage == {} and force_secrets:
         typer.secho("Can't proceed without secrets.", fg="red")
         raise typer.Abort(11)
