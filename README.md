@@ -168,16 +168,7 @@ It will replace markup blocks with *texcret* blocks, see next section on how to 
 ```
 [Texcret start]: #
 
-WUtMQjIAc2vr8vrPlGwcf1DaAAMtLS0ABpnB4rrZn/0Ae8d471Q5mWzGpQRPFmHvlaMjHnoAMD21
-TJB/CwLiGpqRHIckFUA/bIVQN2o+jWjSWwwo2OPSNrTEScUPGe/jlMnbNdvrvvc6dgfds4nuUWdV
-6oYuEEJuaYARdY7u1FiKPy4AMHNJdyZTImGQjpb7gvP7JfhbAw98XpLMfkxEsVByJJTJwuWL+gIZ
-pnLZEsYZtFd1tsTTBV0Un1ZrfQVNgn8PtMdJbFrjiJgL8FdLCEUAMM5fyA0/lRerudUy5jIvtSLE
-rjdq6QhbPosN579V/BiKrRrN6i15cg/g/mssMi8KqFYdcGEbLRGgjT0xObMX/4BIUJ/oEXjIi6PI
-5bsAMNG4GCMza9rRna+gShAVeZXx1wMnvymK+VgygVHblw7Nbm4GdAeUd3DQqrZGXNkrAibE23Oi
-wb6GddE2IRb60HmSn+0xd49Hjy/LRDAAMGH/rTQ21b80Apsuu132tMK4qkxmPTeMkGF7fkwdFOY6
-5nhA30ZqHEG9lgmT9VpJsO8WCeV6hD7DUoKL1/jgl4nZaSBVl4ST1lJn/JUAMAF9wBPAs3TrBqTa
-O96JMcjpJe+oVJbCTIy3RixQNDeHsoVUpdZTMjXwVV5yHGM/etVPK42JfNclt5qwq7aLSR6A9Zyg
-u1ltNpoJKAHEekHqBLOjk/f/ZOiegu5NBiHH7eLjGA==
+WUtMQjIASxrk8R5NUTHg7sJ1AAMtLS0AAeaug2XOZ6mnjZl0CtI81+T7mHVkuuSy2lhelYkAMBD+OGpmXUKBfWGeEhGefz5yS4mAmqs1oNlDYAtprzAQn3RdaxITBoIWsbQGc/6m1FBQ+Hfd2EmZsChHeHy3HQvyNAx6yjPBMJeTRSm7tnXa/FfCZ/OcSxhGzH0=
 
 [Texcret end]: #
 ```
