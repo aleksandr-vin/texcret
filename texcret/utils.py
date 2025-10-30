@@ -205,6 +205,8 @@ def prep_secrets(
                 typer.secho(str(err), fg="red")
                 raise typer.Abort(11) from err
             pwds.append(pwd)
+        else:
+            pwds.append(p)
 
     storage = open_storage(origin, pwds)
     if storage == {} and allow_external_password_cache:
