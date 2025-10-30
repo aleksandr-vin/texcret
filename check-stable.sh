@@ -8,4 +8,4 @@ set -e
 uv run --with git+https://github.com/aleksandr-vin/texcret.git@stable \
        --no-project \
        -- \
-       texcret --help
+       texcret version
