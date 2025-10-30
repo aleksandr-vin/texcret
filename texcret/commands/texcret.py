@@ -22,7 +22,11 @@ from texcret.constants import DATA_IV_LEN, SALT_LEN, WRAP_IV_LEN, TEXCRET_BLOCK_
 
 
 def process_texcret_blocks(
-    in_path: Path, out_path: Path, storage_secrets, used_passwords
+    in_path: Path,
+    out_path: Path,
+    storage_secrets,
+    used_passwords,
+    pretty: bool,
 ):
     """Encrypt the content inside
 
@@ -65,7 +69,11 @@ def process_texcret_blocks(
             recipients.append(Recipient(salt, wrap_iv, wrapped))
 
         header = make_header_v2(data_iv, "---", recipients)
-        res = base64.b64encode(header + ct).decode(encoding="utf-8")
+        if pretty:
+            res = base64.encodebytes(header + ct).decode(encoding="utf-8").strip()
+        else:
+            res = base64.b64encode(header + ct).decode(encoding="utf-8")
+
         print(
             f"[green]✓[/green] Texcreted {inner[:20]!r} -> {res[:20]!r}  (recipients={len(recipients)})"
         )
@@ -92,6 +100,7 @@ def texcret(
     reset_external_cache: bool = typer.Option(
         False, help="Reset external password cache (if pinentry is available)"
     ),
+    pretty: bool = typer.Option(True, help="Produce a pretty-looking base64"),
 ):
     """Texcretize files."""
 
@@ -123,7 +132,7 @@ def texcret(
         else:
             (out_dir or p.parent).mkdir(parents=True, exist_ok=True)
             dst = (out_dir or p.parent) / (p.name + ".texcreted")
-        process_texcret_blocks(p, dst, storage_secrets, used_passwords)
+        process_texcret_blocks(p, dst, storage_secrets, used_passwords, pretty=pretty)
         if p == dst:
             print(f"Processed {p}")
         else:
