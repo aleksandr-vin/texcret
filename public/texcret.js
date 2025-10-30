@@ -375,6 +375,14 @@ window.Texcret = {
     }
   },
 
+  base64Pattern() {
+    // Define the base64-like pattern
+    return new RegExp(
+      String.raw`${this.b64(this.MAGIC2)}(?:[A-Za-z0-9+/=]|\s)*?(?=[^A-Za-z0-9+/=\s]|$)`,
+      "g"
+    );
+  },
+
   /* ====== Decrypt text content of all .texcreted elements ====== */
   async decretex(nodes) {
     if (this._secretsB64.length == 0 && this._passwords.length == 0) {
@@ -386,8 +394,7 @@ window.Texcret = {
       }
     }
 
-    // Define the base64-like pattern
-    const base64Pattern = new RegExp(String.raw`${this.b64(this.MAGIC2)}[A-Za-z0-9+/=]*?(?=[^A-Za-z0-9+/=]|$)`, "g");
+    const base64Pattern = this.base64Pattern();
 
     const self = this;
 
@@ -410,6 +417,10 @@ window.Texcret = {
       let lastIndex = 0;
       let m;
 
+      const oldStyle = node.parentElement.style;
+      node.parentElement.style.color = "#cf2095";
+      node.parentElement.style.fontSize = "2.1em";
+
       // reset regex lastIndex
       base64Pattern.lastIndex = 0;
 
@@ -429,6 +440,7 @@ window.Texcret = {
 
       // Write back
       node.nodeValue = result;
+      node.parentElement.style = oldStyle;
     }
 
     try {
@@ -442,9 +454,8 @@ window.Texcret = {
     }
   },
 
-  async findAllTexcrets() {
-    // Define the base64-like pattern
-    const base64Pattern = new RegExp(String.raw`${this.b64(this.MAGIC2)}[A-Za-z0-9+/=]*?(?=[^A-Za-z0-9+/=]|$)`, "g");
+  async findAllTexcrets(andColorThem) {
+    const base64Pattern = this.base64Pattern();
 
     // Helper: walk through all text nodes in the document
     function* textNodesUnder(el) {
@@ -468,6 +479,9 @@ window.Texcret = {
       const text = node.nodeValue;
       let m;
       while ((m = base64Pattern.exec(text)) !== null) {
+        if (andColorThem) {
+          node.parentElement.style.color = ["#ba56ee", "#41cd29"][matches.length % 2];
+        }
         matches.push({
           text: m[0],
           node,
@@ -490,7 +504,18 @@ window.Texcret = {
   /* ====== Magic: find all nodes that contain WUtMQjIA.... texcrets and add click-callback to decretex them ====== */
   async magic() {
     let self = this;
-    const matches = await this.findAllTexcrets();
+    let isAltPressed = false;
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Alt') isAltPressed = true;
+    });
+
+    document.addEventListener('keyup', (e) => {
+      if (e.key === 'Alt') isAltPressed = false;
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    const matches = await this.findAllTexcrets(withColor = isAltPressed);
     const els = matches.map((v) => v.evt);
     els.forEach(async el => {
       el.addEventListener('dblclick', async () => {

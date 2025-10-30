@@ -110,10 +110,11 @@ It will need secrets to operate, so let's start with this.
 ### Load secrets
 
 Loading secrets for specific origin is possible only in browser at a page from that origin.
-The CLI tool starts a temporary web-server on https://localhost:8443, and
+The CLI tool starts a transient web-server on https://localhost:8443, and
 opens browser pointing to a special bridge page that should be hosted on the origin. It looks like the demo page.
 On this bridge page you can load your secret(s): authenticate using platform passkeys, yubikeys or passwords.
-Then all these secrets are self-encrypted and sent to CLI locally via https://localhost:8443. CLI tool will store them (encrypted) as *texcret* in *~/.config/texcrets/secrets.json*.
+Then all these secrets are self-encrypted and sent to CLI locally via https://localhost:8443.
+CLI tool will store them (encrypted) as *texcret* in *~/.config/texcrets/secrets.json*.
 
 The command to load the secrets is this:
 
